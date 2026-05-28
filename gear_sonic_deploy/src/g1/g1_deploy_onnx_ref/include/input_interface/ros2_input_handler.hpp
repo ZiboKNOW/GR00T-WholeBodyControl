@@ -102,9 +102,9 @@ struct ControlGoalMsg {
     bool toggle_policy_action = false;        ///< Edge-triggered toggle: maps to start/stop control.
     int locomotion_mode = 0;                  ///< 0 = slow walk (custom speed), 1 = fast walk (default speed).
     
-    /// Dex3 hand joint positions (7 DOF per hand).
-    std::array<double, 7> left_hand_joint = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-    std::array<double, 7> right_hand_joint = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    /// Inspire hand joint positions (6 DOF per hand, URDF radians).
+    hand::HandJointArray left_hand_joint = hand::inspireOpenPoseRad();
+    hand::HandJointArray right_hand_joint = hand::inspireOpenPoseRad();
     bool has_hand_joints = false;  ///< True if hand joint data is present.
     
     double ros_timestamp = 0.0;  ///< ROS time in seconds (for synchronisation with other components).
@@ -537,13 +537,13 @@ public:
                         auto [has_left, left_hand] = GetHandPose(true);
                         auto [has_right, right_hand] = GetHandPose(false);
                         std::cout << "  Left hand pose: [";
-                        for (size_t i = 0; i < 7; ++i) {
+                        for (size_t i = 0; i < hand::HAND_DOF; ++i) {
                             std::cout << left_hand[i];
                             if (i < 6) std::cout << ", ";
                         }
                         std::cout << "]" << std::endl;
                         std::cout << "  Right hand pose: [";
-                        for (size_t i = 0; i < 7; ++i) {
+                        for (size_t i = 0; i < hand::HAND_DOF; ++i) {
                             std::cout << right_hand[i];
                             if (i < 6) std::cout << ", ";
                         }
@@ -1061,20 +1061,20 @@ private:
                 msg.locomotion_mode = map_data["locomotion_mode"].as<int>();
             }
             
-            // Extract left_hand_joint (7 doubles - joint positions)
+            // Extract left_hand_joint (6 doubles - Inspire URDF-radian joint positions)
             if (map_data.count("left_hand_joint") && map_data["left_hand_joint"].type == msgpack::type::ARRAY) {
                 auto left_hand_arr = map_data["left_hand_joint"].as<std::vector<double>>();
-                if (left_hand_arr.size() >= 7) {
-                    std::copy_n(left_hand_arr.begin(), 7, msg.left_hand_joint.begin());
+                if (left_hand_arr.size() >= hand::HAND_DOF) {
+                    std::copy_n(left_hand_arr.begin(), hand::HAND_DOF, msg.left_hand_joint.begin());
                     msg.has_hand_joints = true;
                 }
             }
             
-            // Extract right_hand_joint (7 doubles - joint positions)
+            // Extract right_hand_joint (6 doubles - Inspire URDF-radian joint positions)
             if (map_data.count("right_hand_joint") && map_data["right_hand_joint"].type == msgpack::type::ARRAY) {
                 auto right_hand_arr = map_data["right_hand_joint"].as<std::vector<double>>();
-                if (right_hand_arr.size() >= 7) {
-                    std::copy_n(right_hand_arr.begin(), 7, msg.right_hand_joint.begin());
+                if (right_hand_arr.size() >= hand::HAND_DOF) {
+                    std::copy_n(right_hand_arr.begin(), hand::HAND_DOF, msg.right_hand_joint.begin());
                     msg.has_hand_joints = true;
                 }
             }
@@ -1263,8 +1263,8 @@ private:
      *    - head_after_ik: double[16] (4x4 transformation matrix, flattened row-major)
      *    - left_wrist: double[16] (4x4 transformation matrix, flattened row-major, non-IK)
      *    - right_wrist: double[16] (4x4 transformation matrix, flattened row-major, non-IK)
-     *    - left_hand_joint: double[7] (7 DOF joint positions for left hand)
-     *    - right_hand_joint: double[7] (7 DOF joint positions for right hand)
+     *    - left_hand_joint: double[6] (Inspire URDF-radian joint positions for left hand)
+     *    - right_hand_joint: double[6] (Inspire URDF-radian joint positions for right hand)
      *    - base_height_command: double (desired base height)
      *    - toggle_policy_action: bool (toggle between start/stop control)
      *    - locomotion_mode: int (0 = slow walk with custom speed, 1 = fast walk with default speed)

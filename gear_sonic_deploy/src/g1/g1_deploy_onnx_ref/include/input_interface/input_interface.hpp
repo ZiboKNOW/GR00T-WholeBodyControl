@@ -35,6 +35,7 @@
 #include <memory>
 #include <optional>
 #include "../utils.hpp"              // For DataBuffer  
+#include "../hand_types.hpp"         // For HandJointArray
 #include "../robot_parameters.hpp"   // For HeadingState, OperatorState
 #include "../motion_data_reader.hpp" // For MotionDataReader, MotionSequence
 #include "../math_utils.hpp"         // For float_to_double
@@ -132,7 +133,7 @@ public:
       return has_vr_5point_control_;
     }
 
-    /// @return True if this interface provides Dex3 hand joint targets (7 DOF per hand).
+    /// @return True if this interface provides hand joint targets.
     virtual bool HasHandJoints() const {
       return has_hand_joints_;
     }
@@ -257,8 +258,8 @@ public:
     }
 
     // =========================================================================
-    // Hand max close ratio control (keyboard-controlled via X/C keys)
-    // Controls how much the Dex3 hands can close (0.2 = 80% open, 1.0 = fully closed)
+    // Hand max close ratio control (keyboard-controlled via X/C keys).
+    // Kept for compatibility with existing keyboard controls.
     // =========================================================================
     
     // Get the current max close ratio (keyboard-controlled)
@@ -332,19 +333,16 @@ public:
     // ------------------------------------------------------------------
 
     /**
-     * @brief Get 7-DOF Dex3 hand joint positions.
+     * @brief Get 6-DOF Inspire hand joint positions in URDF radians.
      * @param is_left  true → left hand, false → right hand.
      * @return {true, joints} if hand joint data is available; {false, defaults} otherwise.
-     *         Default left  = {0, 0,  1.75, -1.57, -1.75, -1.57, -1.75}
-     *         Default right = {0, 0, -1.75,  1.57,  1.75,  1.57,  1.75}
+     *         Default is the Inspire open pose in URDF order:
+     *         [thumb_yaw, thumb_pitch, index, middle, ring, pinky].
      */
-    virtual std::pair<bool, std::array<double, 7>> GetHandPose(bool is_left) const {
+    virtual std::pair<bool, hand::HandJointArray> GetHandPose(bool is_left) const {
+        (void)is_left;
         if(!has_hand_joints_) {
-            if(is_left) {
-                return {false, {0, 0, 1.75, -1.57, -1.75, -1.57, -1.75 }};
-            } else {
-                return {false, {0, 0, -1.75,  1.57,  1.75,  1.57,  1.75 }};
-            }
+            return {false, hand::inspireOpenPoseRad()};
         }
         if(is_left) {
             auto buffered_data = left_hand_joint_.GetDataWithTime();
@@ -352,14 +350,14 @@ public:
                 return {true, *buffered_data.data};
             }
             else {
-                return {false, {0, 0, 1.75, -1.57, -1.75, -1.57, -1.75 }};
+                return {false, hand::inspireOpenPoseRad()};
             }
         } else {
             auto buffered_data = right_hand_joint_.GetDataWithTime();
             if (buffered_data.data) {
                 return {true, *buffered_data.data};
             } else {
-                return {false, {0, 0, -1.75,  1.57,  1.75,  1.57,  1.75 }};
+                return {false, hand::inspireOpenPoseRad()};
             }
         }
     }
@@ -460,7 +458,7 @@ protected:
     InputType type_ = InputType::UNKNOWN;             ///< Concrete input source tag.
     std::atomic<bool> has_vr_3point_control_{false};  ///< VR 3-point tracking available.
     std::atomic<bool> has_vr_5point_control_{false};  ///< VR 5-point tracking available.
-    std::atomic<bool> has_hand_joints_{false};        ///< Dex3 hand joint data available.
+    std::atomic<bool> has_hand_joints_{false};        ///< Hand joint data available.
     std::atomic<bool> has_external_token_state_{false}; ///< External token-state vector available.
     std::atomic<bool> has_upper_body_control_{false}; ///< Upper-body 17-DOF targets available.
 
@@ -484,15 +482,15 @@ protected:
     /// Upper-body target joint velocities (17 DOF, rad/s).
     DataBuffer<std::array<double, 17>> upper_body_joint_velocities_;
     
-    /// Left-hand Dex3 joint positions (7 DOF).
-    DataBuffer<std::array<double, 7>> left_hand_joint_;
-    /// Right-hand Dex3 joint positions (7 DOF).
-    DataBuffer<std::array<double, 7>> right_hand_joint_;
+    /// Left-hand Inspire joint positions (6 DOF, URDF radians).
+    DataBuffer<hand::HandJointArray> left_hand_joint_;
+    /// Right-hand Inspire joint positions (6 DOF, URDF radians).
+    DataBuffer<hand::HandJointArray> right_hand_joint_;
     
     /// Arbitrary external token-state vector (e.g. latent codes from a remote model).
     DataBuffer<std::vector<double>> external_token_state_;
 
-    /// Keyboard-controlled max close ratio for Dex3 hands.
+    /// Keyboard-controlled max close ratio for legacy hand controls.
     /// Adjusted via keyboard (X = +0.1, C = −0.1), clamped to [0.2, 1.0].
     /// 1.0 = fully closed allowed (default); use --max-close-ratio CLI arg to limit.
     std::atomic<double> max_close_ratio_{1.0};

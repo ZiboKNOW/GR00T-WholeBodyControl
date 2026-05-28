@@ -491,16 +491,15 @@ Entry StateLogger::makeZeroEntry_() const {
   if (configured_num_actions_ > 0) {
     e.last_action.assign(static_cast<size_t>(configured_num_actions_), 0.0);
   }
-  // Hand data (7 motors each)
-  e.left_hand_q.assign(7, 0.0);
-  e.left_hand_dq.assign(7, 0.0);
-  e.right_hand_q.assign(7, 0.0);
-  e.right_hand_dq.assign(7, 0.0);
-  e.last_left_hand_action.assign(7, 0.0);
-  e.last_right_hand_action.assign(7, 0.0);
+  // Hand data (6 Inspire motors each)
+  e.left_hand_q.assign(hand::HAND_DOF, 0.0);
+  e.left_hand_dq.assign(hand::HAND_DOF, 0.0);
+  e.right_hand_q.assign(hand::HAND_DOF, 0.0);
+  e.right_hand_dq.assign(hand::HAND_DOF, 0.0);
+  e.last_left_hand_action.assign(hand::HAND_DOF, 0.0);
+  e.last_right_hand_action.assign(hand::HAND_DOF, 0.0);
   // Post-state data (default to no post-state data)
   e.has_post_state_data = false;
   e.token_state.clear();
   return e;
 }
-

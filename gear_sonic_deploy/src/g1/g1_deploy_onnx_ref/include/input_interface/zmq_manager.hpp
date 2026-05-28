@@ -51,6 +51,7 @@
 #include <thread>
 #include <chrono>
 #include <mutex>
+#include <cstddef>
 
 #include "input_interface.hpp"
 #include "input_command.hpp"
@@ -423,7 +424,7 @@ class ZMQManager : public InputInterface {
       return InputInterface::GetVR3PointCompliance();
     }
 
-    std::pair<bool, std::array<double, 7>> GetHandPose(bool is_left) const override {
+    std::pair<bool, hand::HandJointArray> GetHandPose(bool is_left) const override {
       if ((active_mode_ == ManagedMode::STREAMED_MOTION || (!is_planner_ready_ && switch_from_teleop_to_planner_)) && pose_interface_) {
         return pose_interface_->GetHandPose(is_left);
       }
@@ -445,6 +446,22 @@ class ZMQManager : public InputInterface {
     }
 
   private:
+    static size_t handFieldByteCount_(const ZMQPackedMessageSubscriber::FieldInfo& field) {
+      const bool valid_shape =
+          (field.shape.size() == 1 && field.shape[0] == hand::HAND_DOF) ||
+          (field.shape.size() == 2 && field.shape[1] == hand::HAND_DOF);
+      if (!valid_shape) {
+        return 0;
+      }
+      if (field.dtype == "f32") {
+        return hand::HAND_DOF * sizeof(float);
+      }
+      if (field.dtype == "f64") {
+        return hand::HAND_DOF * sizeof(double);
+      }
+      return 0;
+    }
+
     // Handle planner mode input (similar to GamepadManager::handleGamepadPlannerInput)
     void handlePlannerInput(MotionDataReader& motion_reader,
                            std::shared_ptr<const MotionSequence>& current_motion,
@@ -944,66 +961,70 @@ class ZMQManager : public InputInterface {
         upper_body_joint_velocities_.SetData(upper_body_velocity_data);
       }
       
-      // Optional: left_hand_joints (7 DOF, decode based on dtype)
+      // Optional: left_hand_joints (6 DOF Inspire URDF-radian values, decode based on dtype)
       if (left_hand_joints_idx >= 0) {
         const auto& lh_buf = bufs[left_hand_joints_idx];
         const auto& lh_field = hdr.fields[left_hand_joints_idx];
+        const size_t required_bytes = handFieldByteCount_(lh_field);
+        if (required_bytes > 0 && lh_buf.size >= required_bytes) {
+          hand::HandJointArray left_hand_joints_data{};
+          if (lh_field.dtype == "f32") {
+            for (std::size_t i = 0; i < hand::HAND_DOF; ++i) {
+              float val;
+              std::memcpy(&val,
+                          static_cast<const uint8_t*>(lh_buf.data) + i * sizeof(float),
+                          sizeof(float));
+              if (needs_swap) val = byte_swap(val);
+              left_hand_joints_data[i] = static_cast<double>(val);
+            }
+          } else {
+            for (std::size_t i = 0; i < hand::HAND_DOF; ++i) {
+              double val;
+              std::memcpy(&val,
+                          static_cast<const uint8_t*>(lh_buf.data) + i * sizeof(double),
+                          sizeof(double));
+              if (needs_swap) val = byte_swap(val);
+              left_hand_joints_data[i] = val;
+            }
+          }
+          msg.left_hand_joints = left_hand_joints_data;
 
-        std::array<double, 7> left_hand_joints_data{};
-        if (lh_field.dtype == "f32") {
-          for (int i = 0; i < 7; ++i) {
-            float val;
-            std::memcpy(&val,
-                        static_cast<const uint8_t*>(lh_buf.data) + i * sizeof(float),
-                        sizeof(float));
-            if (needs_swap) val = byte_swap(val);
-            left_hand_joints_data[i] = static_cast<double>(val);
-          }
-        } else { // f64 or default
-          for (int i = 0; i < 7; ++i) {
-            double val;
-            std::memcpy(&val,
-                        static_cast<const uint8_t*>(lh_buf.data) + i * sizeof(double),
-                        sizeof(double));
-            if (needs_swap) val = byte_swap(val);
-            left_hand_joints_data[i] = val;
-          }
+          // Push into left hand joint buffer
+          left_hand_joint_.SetData(left_hand_joints_data);
         }
-        msg.left_hand_joints = left_hand_joints_data;
-
-        // Push into left hand joint buffer
-        left_hand_joint_.SetData(left_hand_joints_data);
       }
 
-      // Optional: right_hand_joints (7 DOF, decode based on dtype)
+      // Optional: right_hand_joints (6 DOF Inspire URDF-radian values, decode based on dtype)
       if (right_hand_joints_idx >= 0) {
         const auto& rh_buf = bufs[right_hand_joints_idx];
         const auto& rh_field = hdr.fields[right_hand_joints_idx];
+        const size_t required_bytes = handFieldByteCount_(rh_field);
+        if (required_bytes > 0 && rh_buf.size >= required_bytes) {
+          hand::HandJointArray right_hand_joints_data{};
+          if (rh_field.dtype == "f32") {
+            for (std::size_t i = 0; i < hand::HAND_DOF; ++i) {
+              float val;
+              std::memcpy(&val,
+                          static_cast<const uint8_t*>(rh_buf.data) + i * sizeof(float),
+                          sizeof(float));
+              if (needs_swap) val = byte_swap(val);
+              right_hand_joints_data[i] = static_cast<double>(val);
+            }
+          } else {
+            for (std::size_t i = 0; i < hand::HAND_DOF; ++i) {
+              double val;
+              std::memcpy(&val,
+                          static_cast<const uint8_t*>(rh_buf.data) + i * sizeof(double),
+                          sizeof(double));
+              if (needs_swap) val = byte_swap(val);
+              right_hand_joints_data[i] = val;
+            }
+          }
+          msg.right_hand_joints = right_hand_joints_data;
 
-        std::array<double, 7> right_hand_joints_data{};
-        if (rh_field.dtype == "f32") {
-          for (int i = 0; i < 7; ++i) {
-            float val;
-            std::memcpy(&val,
-                        static_cast<const uint8_t*>(rh_buf.data) + i * sizeof(float),
-                        sizeof(float));
-            if (needs_swap) val = byte_swap(val);
-            right_hand_joints_data[i] = static_cast<double>(val);
-          }
-        } else { // f64 or default
-          for (int i = 0; i < 7; ++i) {
-            double val;
-            std::memcpy(&val,
-                        static_cast<const uint8_t*>(rh_buf.data) + i * sizeof(double),
-                        sizeof(double));
-            if (needs_swap) val = byte_swap(val);
-            right_hand_joints_data[i] = val;
-          }
+          // Push into right hand joint buffer
+          right_hand_joint_.SetData(right_hand_joints_data);
         }
-        msg.right_hand_joints = right_hand_joints_data;
-
-        // Push into right hand joint buffer
-        right_hand_joint_.SetData(right_hand_joints_data);
       }
 
       // Decode VR 3-point tracking data if present (9 doubles for position, 12 doubles for orientation, 3 doubles for compliance)

@@ -43,15 +43,15 @@
  *   9  | body_dq                | double[29]   | Joint velocities.
  *      |                        |              |
  *      | **Hand joints**        |              |
- *  10  | left_hand_q            | double[7]    | Left-hand joint positions (from state logger).
- *  11  | left_hand_dq           | double[7]    | Left-hand joint velocities.
- *  12  | right_hand_q           | double[7]    | Right-hand joint positions (from state logger).
- *  13  | right_hand_dq          | double[7]    | Right-hand joint velocities.
+ *  10  | left_hand_q            | double[6]    | Left-hand joint positions (from state logger).
+ *  11  | left_hand_dq           | double[6]    | Left-hand joint velocities.
+ *  12  | right_hand_q           | double[6]    | Right-hand joint positions (from state logger).
+ *  13  | right_hand_dq          | double[6]    | Right-hand joint velocities.
  *      |                        |              |
  *      | **Policy actions**     |              |
  *  14  | last_action            | double[29]   | Last body action (scaled + default offsets).
- *  15  | last_left_hand_action  | double[7]    | Last left-hand action.
- *  16  | last_right_hand_action | double[7]    | Last right-hand action.
+ *  15  | last_left_hand_action  | double[6]    | Last left-hand action.
+ *  16  | last_right_hand_action | double[6]    | Last right-hand action.
  *      |                        |              |
  *      | **Encoder**            |              |
  *  17  | token_state            | double[N]    | Encoder token state (empty array if N/A).
@@ -69,8 +69,8 @@
  *  23  | base_trans_measured    | double[3]    | Measured base translation (fixed default).
  *  24  | base_quat_measured     | double[4]    | Measured base quaternion (= base_quat).
  *  25  | body_q_measured        | double[29]   | Measured joint positions (= body_q).
- *  26  | left_hand_q_measured   | double[7]    | Measured left-hand Dex3 positions.
- *  27  | right_hand_q_measured  | double[7]    | Measured right-hand Dex3 positions.
+ *  26  | left_hand_q_measured   | double[6]    | Measured left-hand Inspire positions.
+ *  27  | right_hand_q_measured  | double[6]    | Measured right-hand Inspire positions.
  *      |                        |              |
  *      | **Viz: VR 3-point**    |              |
  *  28  | vr_3point_position     | double[9]    | VR positions (3×xyz, target body frame).
@@ -164,8 +164,8 @@ public:
         const std::array<double, 9>& vr_3point_position,
         const std::array<double, 12>& vr_3point_orientation,
         const std::array<double, 3>& vr_3point_compliance,
-        const std::array<double, 7>& left_hand_joint,
-        const std::array<double, 7>& right_hand_joint,
+        const hand::HandJointArray& left_hand_joint,
+        const hand::HandJointArray& right_hand_joint,
         const std::array<double, 4>& init_ref_data_root_rot_array,
         DataBuffer<HeadingState>& heading_state_buffer,
         std::shared_ptr<const MotionSequence> current_motion,

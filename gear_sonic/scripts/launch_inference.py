@@ -120,7 +120,7 @@ class InferenceLaunchConfig:
     policy_port: int = 5550
     """Isaac-GR00T PolicyServer port."""
 
-    embodiment_tag: str = "unitree_g1_sonic"
+    embodiment_tag: str = "unitree_g1_sonic_inspire"
     """Embodiment tag for policy inference."""
 
     prompt: str = "demo"

@@ -290,7 +290,7 @@ class GamepadManager : public InputInterface {
       return InputInterface::GetVR3PointCompliance();
     }
 
-    std::pair<bool, std::array<double, 7>> GetHandPose(bool is_left) const override {
+    std::pair<bool, hand::HandJointArray> GetHandPose(bool is_left) const override {
       if (active_ != ManagedType::GAMEPAD && current_) {
         return current_->GetHandPose(is_left);
       }
@@ -1074,5 +1074,4 @@ class GamepadManager : public InputInterface {
 };
 
 #endif // GAMEPAD_MANAGER_HPP
-
 

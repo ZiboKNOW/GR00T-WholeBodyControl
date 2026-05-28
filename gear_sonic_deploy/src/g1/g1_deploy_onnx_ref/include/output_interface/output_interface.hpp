@@ -44,6 +44,7 @@
 
 #include "../state_logger.hpp"
 #include "../motion_data_reader.hpp"
+#include "../hand_types.hpp"
 
 /**
  * @class OutputInterface
@@ -74,8 +75,8 @@ public:
      * @param vr_3point_position         VR 3-point positions [left_wrist, right_wrist, head] × xyz.
      * @param vr_3point_orientation      VR 3-point orientations [left, right, head] × quaternion wxyz.
      * @param vr_3point_compliance       VR compliance values [left_arm, right_arm, head].
-     * @param left_hand_joint            Left-hand Dex3 joint positions (7 DOF).
-     * @param right_hand_joint           Right-hand Dex3 joint positions (7 DOF).
+     * @param left_hand_joint            Left-hand Inspire joint positions (6 DOF, URDF radians).
+     * @param right_hand_joint           Right-hand Inspire joint positions (6 DOF, URDF radians).
      * @param init_ref_data_root_rot_array  Initial reference-data root rotation (quaternion wxyz).
      * @param heading_state_buffer       Thread-safe heading buffer (init quat + delta heading).
      * @param current_motion             Currently-active MotionSequence.
@@ -85,8 +86,8 @@ public:
         const std::array<double, 9>& vr_3point_position,
         const std::array<double, 12>& vr_3point_orientation,
         const std::array<double, 3>& vr_3point_compliance,
-        const std::array<double, 7>& left_hand_joint,
-        const std::array<double, 7>& right_hand_joint,
+        const hand::HandJointArray& left_hand_joint,
+        const hand::HandJointArray& right_hand_joint,
         const std::array<double, 4>& init_ref_data_root_rot_array,
         DataBuffer<HeadingState>& heading_state_buffer,
         std::shared_ptr<const MotionSequence> current_motion,
@@ -123,8 +124,8 @@ protected:
      *   base_trans_measured    |  3   | Measured base translation (fixed default).
      *   base_quat_measured     |  4   | Measured base quaternion from IMU.
      *   body_q_measured        | 29   | Measured joint positions (MuJoCo order + default offsets).
-     *   left_hand_q_measured   |  7   | Left-hand Dex3 joint positions.
-     *   right_hand_q_measured  |  7   | Right-hand Dex3 joint positions.
+     *   left_hand_q_measured   |  6   | Left-hand Inspire joint positions (URDF radians).
+     *   right_hand_q_measured  |  6   | Right-hand Inspire joint positions (URDF radians).
      *   vr_3point_position     |  9   | VR positions rotated into target body frame.
      *   vr_3point_orientation  | 12   | VR orientations (passed through).
      *   vr_3point_compliance   |  3   | VR compliance values (passed through).
@@ -136,8 +137,8 @@ protected:
         const std::array<double, 9>& vr_3point_position,
         const std::array<double, 12>& vr_3point_orientation,
         const std::array<double, 3>& vr_3point_compliance,
-        const std::array<double, 7>& left_hand_joint,
-        const std::array<double, 7>& right_hand_joint,
+        const hand::HandJointArray& left_hand_joint,
+        const hand::HandJointArray& right_hand_joint,
         const std::array<double, 4>& init_ref_data_root_rot_array,
         DataBuffer<HeadingState>& heading_state_buffer,
         std::shared_ptr<const MotionSequence> current_motion,
@@ -293,4 +294,3 @@ protected:
 };
 
 #endif // OUTPUT_INTERFACE_HPP
-

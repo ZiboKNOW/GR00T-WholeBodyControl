@@ -106,8 +106,8 @@ class ZMQPublisher:
         height: float (-1 for default)
         upper_body_position: optional [17] upper body joint positions (f32)
         upper_body_velocity: optional [17] upper body joint velocities (f32)
-        left_hand_joints: optional [7] left hand joint positions (f32)
-        right_hand_joints: optional [7] right hand joint positions (f32)
+        left_hand_joints: optional [6] left hand joint positions (f32)
+        right_hand_joints: optional [6] right hand joint positions (f32)
         """
         topic = b"planner"
         
@@ -130,14 +130,14 @@ class ZMQPublisher:
                 {"name": "upper_body_velocity", "dtype": "f32", "shape": [17]}
             )
         
-        # Optional hand joint fields (7-DOF, f32)
+        # Optional hand joint fields (6-DOF, f32)
         if left_hand_joints is not None:
             fields.append(
-                {"name": "left_hand_joints", "dtype": "f32", "shape": [7]}
+                {"name": "left_hand_joints", "dtype": "f32", "shape": [6]}
             )
         if right_hand_joints is not None:
             fields.append(
-                {"name": "right_hand_joints", "dtype": "f32", "shape": [7]}
+                {"name": "right_hand_joints", "dtype": "f32", "shape": [6]}
             )
 
         header = {
@@ -165,10 +165,10 @@ class ZMQPublisher:
             ub_vel = np.asarray(upper_body_velocity, dtype=np.float32).reshape(17)
             data += ub_vel.tobytes()
         if left_hand_joints is not None:
-            lh_joints = np.asarray(left_hand_joints, dtype=np.float32).reshape(7)
+            lh_joints = np.asarray(left_hand_joints, dtype=np.float32).reshape(6)
             data += lh_joints.tobytes()
         if right_hand_joints is not None:
-            rh_joints = np.asarray(right_hand_joints, dtype=np.float32).reshape(7)
+            rh_joints = np.asarray(right_hand_joints, dtype=np.float32).reshape(6)
             data += rh_joints.tobytes()
         
         # Send packed message
@@ -700,4 +700,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

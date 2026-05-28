@@ -20,6 +20,7 @@
 #include <chrono>
 #include <optional>
 
+#include "../hand_types.hpp"
 #include "../localmotion_kplanner.hpp"  // For LocomotionMode enum
 
 // ---------------------------------------------------------------------------
@@ -62,8 +63,8 @@ struct CommandMessage {
  *   - height             : float – desired body height      (-1.0 = use default)
  *   - upper_body_position: float[17] – target upper-body joint positions  (radians)
  *   - upper_body_velocity: float[17] – target upper-body joint velocities (rad/s)
- *   - left_hand_joints   : float[7]  – Dex3 left-hand joint positions
- *   - right_hand_joints  : float[7]  – Dex3 right-hand joint positions
+ *   - left_hand_joints   : float[6]  – Inspire left-hand joint positions (URDF radians)
+ *   - right_hand_joints  : float[6]  – Inspire right-hand joint positions (URDF radians)
  *
  * The `timestamp` field is set locally on receipt and used for timeout
  * detection (planner messages older than ~1 s are considered stale).
@@ -89,11 +90,11 @@ struct PlannerMessage {
   /// Optional upper-body joint target velocities (17 DOF, rad/s).
   std::optional<std::array<double, 17>> upper_body_velocity;
 
-  /// Optional left-hand Dex3 joint positions (7 DOF).
-  std::optional<std::array<double, 7>> left_hand_joints;
+  /// Optional left-hand Inspire joint positions (6 DOF, URDF radians).
+  std::optional<hand::HandJointArray> left_hand_joints;
 
-  /// Optional right-hand Dex3 joint positions (7 DOF).
-  std::optional<std::array<double, 7>> right_hand_joints;
+  /// Optional right-hand Inspire joint positions (6 DOF, URDF radians).
+  std::optional<hand::HandJointArray> right_hand_joints;
 
   /// Desired locomotion speed.  -1.0 means "use the default for the current mode".
   double speed = -1.0;
@@ -105,4 +106,3 @@ struct PlannerMessage {
   /// Used to detect planner timeouts (stale data → fallback to IDLE).
   std::chrono::steady_clock::time_point timestamp{};
 };
-

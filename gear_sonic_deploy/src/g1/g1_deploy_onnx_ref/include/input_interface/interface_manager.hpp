@@ -248,7 +248,7 @@ class InterfaceManager : public InputInterface {
       return InputInterface::GetVR3PointOrientation();  // Fallback to base class
     }
     
-    std::pair<bool, std::array<double, 7>> GetHandPose(bool is_left) const override {
+    std::pair<bool, hand::HandJointArray> GetHandPose(bool is_left) const override {
       if (current_) {
         return current_->GetHandPose(is_left);
       }
@@ -392,5 +392,4 @@ class InterfaceManager : public InputInterface {
 };
 
 #endif // INTERFACE_MANAGER_HPP
-
 

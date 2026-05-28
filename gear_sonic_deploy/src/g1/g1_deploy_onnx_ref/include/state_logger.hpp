@@ -29,8 +29,8 @@
  *   dq.csv              | Joint velocities (hardware order)
  *   action.csv          | Policy actions (hardware order, scaled + offset)
  *   motor_temperature.csv | Motor temperatures (2 per motor: winding, driver)
- *   left_hand_q/dq.csv  | Left Dex3 hand positions / velocities
- *   right_hand_q/dq.csv | Right Dex3 hand positions / velocities
+ *   left_hand_q/dq.csv  | Left Inspire hand positions / velocities
+ *   right_hand_q/dq.csv | Right Inspire hand positions / velocities
  *   left/right_hand_action.csv | Hand actions
  *   token_state.csv     | Encoder token output
  *   encoder_mode.csv    | Encoder mode per tick
@@ -54,6 +54,7 @@
 #pragma once
 
 #include "file_sink.hpp"
+#include "hand_types.hpp"
 
 #include <array>
 #include <atomic>
@@ -103,13 +104,13 @@ class StateLogger {
     // Motor estimated torque (one per motor, Nm)
     std::vector<double> motor_torque;  // size = num_joints
 
-    // Dex3 hands (7 motors each)
-    std::vector<double> left_hand_q;       // size = 7 (q positions)
-    std::vector<double> left_hand_dq;      // size = 7 (dq velocities)
-    std::vector<double> right_hand_q;      // size = 7 (q positions)
-    std::vector<double> right_hand_dq;     // size = 7 (dq velocities)
-    std::vector<double> last_left_hand_action;  // size = 7
-    std::vector<double> last_right_hand_action; // size = 7
+    // Inspire hands (6 motors each, URDF radians)
+    std::vector<double> left_hand_q;       // size = 6 (q positions)
+    std::vector<double> left_hand_dq;      // size = 6 (dq velocities)
+    std::vector<double> right_hand_q;      // size = 6 (q positions)
+    std::vector<double> right_hand_dq;     // size = 6 (dq velocities)
+    std::vector<double> last_left_hand_action;  // size = 6
+    std::vector<double> last_right_hand_action; // size = 6
 
     // Post-state data (set after initial state logging via LogPostState)
     bool has_post_state_data = false;

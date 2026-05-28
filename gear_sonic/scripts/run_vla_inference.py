@@ -45,16 +45,25 @@ from gear_sonic.utils.inference.initial_poses import LATENT_INITIAL_MOTION_TOKEN
 from gear_sonic.utils.inference.vla_utils import (
     calculate_latency_compensated_index,
     concat_action,
-    prepare_observation_for_eval,
     should_trigger_new_inference,
-)
-from gear_sonic.utils.teleop.solver.hand.g1_gripper_ik_solver import (
-    G1GripperInverseKinematicsSolver,
 )
 from gear_sonic.utils.teleop.zmq.zmq_planner_sender import (
     build_command_message,
     pack_pose_message,
 )
+
+INSPIRE_HAND_DOF = 6
+INSPIRE_OPEN_HAND = np.array([-0.1, -0.1, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+INSPIRE_CLOSED_HAND = np.array([1.3, 0.6, 1.7, 1.7, 1.7, 1.7], dtype=np.float32)
+
+
+def _validate_hand_action(name: str, value: np.ndarray) -> np.ndarray:
+    value = np.asarray(value, dtype=np.float32)
+    if value.shape[-1] != INSPIRE_HAND_DOF:
+        raise ValueError(
+            f"{name} must have last dimension {INSPIRE_HAND_DOF}, got {value.shape}"
+        )
+    return value
 
 
 @dataclass
@@ -107,7 +116,7 @@ class InferenceConfig:
     """ZMQ port for keyboard input."""
 
     # Embodiment
-    embodiment_tag: str = "unitree_g1_sonic"
+    embodiment_tag: str = "unitree_g1_sonic_inspire"
     """Embodiment tag for policy inference."""
 
     # Prompt / eval
@@ -139,8 +148,8 @@ def pack_latent_action_message(
     Args:
         motion_token: Shape ``[64]`` (flat) or ``[1, 64]``.
         frame_index:  Shape ``[1]``.
-        left_hand_joints:  Shape ``[7]`` or ``[1, 7]``, optional.
-        right_hand_joints: Shape ``[7]`` or ``[1, 7]``, optional.
+        left_hand_joints:  Shape ``[6]`` or ``[1, 6]``, optional.
+        right_hand_joints: Shape ``[6]`` or ``[1, 6]``, optional.
 
     Returns:
         Packed ZMQ message bytes.
@@ -162,23 +171,15 @@ def pack_latent_action_message(
     }
 
     if left_hand_joints is not None:
-        left_hand_joints = np.asarray(left_hand_joints, dtype=np.float32)
+        left_hand_joints = _validate_hand_action("left_hand_joints", left_hand_joints)
         if left_hand_joints.ndim == 1:
-            if left_hand_joints.shape[0] != 7:
-                raise ValueError(
-                    f"left_hand_joints must have shape [7], got {left_hand_joints.shape}"
-                )
-            left_hand_joints = left_hand_joints.reshape(1, 7)
+            left_hand_joints = left_hand_joints.reshape(1, INSPIRE_HAND_DOF)
         pose_data["left_hand_joints"] = left_hand_joints
 
     if right_hand_joints is not None:
-        right_hand_joints = np.asarray(right_hand_joints, dtype=np.float32)
+        right_hand_joints = _validate_hand_action("right_hand_joints", right_hand_joints)
         if right_hand_joints.ndim == 1:
-            if right_hand_joints.shape[0] != 7:
-                raise ValueError(
-                    f"right_hand_joints must have shape [7], got {right_hand_joints.shape}"
-                )
-            right_hand_joints = right_hand_joints.reshape(1, 7)
+            right_hand_joints = right_hand_joints.reshape(1, INSPIRE_HAND_DOF)
         pose_data["right_hand_joints"] = right_hand_joints
 
     return pack_pose_message(pose_data, topic="pose", version=4)
@@ -229,15 +230,19 @@ def prepare_observation_from_sensors(
 
     cam_img = camera_msg["images"]["ego_view"]
 
-    # Copy index finger data to middle finger (hardware coupling)
-    state_msg["left_hand_q"][5] = state_msg["left_hand_q"][3]
-    state_msg["left_hand_q"][6] = state_msg["left_hand_q"][4]
-
-    qpos = robot_model.get_configuration_from_actuated_joints(
-        body_actuated_joint_values=state_msg["body_q"],
-        left_hand_actuated_joint_values=state_msg["left_hand_q"],
-        right_hand_actuated_joint_values=state_msg["right_hand_q"],
-    )
+    body_q = np.asarray(state_msg["body_q"], dtype=np.float32)
+    left_hand_q = np.asarray(state_msg["left_hand_q"], dtype=np.float32)
+    right_hand_q = np.asarray(state_msg["right_hand_q"], dtype=np.float32)
+    if body_q.shape[-1] != 29:
+        raise ValueError(f"body_q must have shape [29], got {body_q.shape}")
+    if left_hand_q.shape[-1] != INSPIRE_HAND_DOF:
+        raise ValueError(
+            f"left_hand_q must have shape [{INSPIRE_HAND_DOF}], got {left_hand_q.shape}"
+        )
+    if right_hand_q.shape[-1] != INSPIRE_HAND_DOF:
+        raise ValueError(
+            f"right_hand_q must have shape [{INSPIRE_HAND_DOF}], got {right_hand_q.shape}"
+        )
 
     video = {"ego_view": cam_img[np.newaxis, np.newaxis]}
     if "left_wrist" in camera_msg["images"]:
@@ -251,11 +256,15 @@ def prepare_observation_from_sensors(
         "language": {
             "annotation.human.task_description": [[language_prompt]],
         },
-        "q": np.asarray(qpos, dtype=np.float32)[np.newaxis, np.newaxis],
         "timestamps": camera_msg["timestamps"]["ego_view"],
     }
-
-    observation = prepare_observation_for_eval(robot_model, observation)
+    observation["state"]["left_leg"] = body_q[0:6][np.newaxis, np.newaxis]
+    observation["state"]["right_leg"] = body_q[6:12][np.newaxis, np.newaxis]
+    observation["state"]["waist"] = body_q[12:15][np.newaxis, np.newaxis]
+    observation["state"]["left_arm"] = body_q[15:22][np.newaxis, np.newaxis]
+    observation["state"]["left_hand"] = left_hand_q[np.newaxis, np.newaxis]
+    observation["state"]["right_arm"] = body_q[22:29][np.newaxis, np.newaxis]
+    observation["state"]["right_hand"] = right_hand_q[np.newaxis, np.newaxis]
 
     # Projected gravity for Sonic latent embodiment
     assert "base_quat" in state_msg, "base_quat not found in state_msg"
@@ -349,13 +358,6 @@ def _inference_worker_loop(
 # ---------------------------------------------------------------------------
 
 
-def _compute_closed_hand_joints(side: str) -> np.ndarray:
-    """Compute closed hand joint positions using G1GripperInverseKinematicsSolver."""
-    side_str = "left" if side.upper() == "L" else "right"
-    solver = G1GripperInverseKinematicsSolver(side=side_str)
-    return solver._get_middle_close_q_desired().astype(np.float32)
-
-
 def main(config: InferenceConfig):
     pause_loop = True
 
@@ -411,14 +413,14 @@ def main(config: InferenceConfig):
         """Publish initial pose command to move robot to starting position."""
         print("Moving to initial pose")
         left_hand = (
-            _compute_closed_hand_joints("L")
+            INSPIRE_CLOSED_HAND.copy()
             if initial_pose_left_hand_closed
-            else np.zeros(7, dtype=np.float32)
+            else INSPIRE_OPEN_HAND.copy()
         )
         right_hand = (
-            _compute_closed_hand_joints("R")
+            INSPIRE_CLOSED_HAND.copy()
             if initial_pose_right_hand_closed
-            else np.zeros(7, dtype=np.float32)
+            else INSPIRE_OPEN_HAND.copy()
         )
         zmq_message = pack_latent_action_message(
             motion_token=LATENT_INITIAL_MOTION_TOKEN,
@@ -631,6 +633,12 @@ def main(config: InferenceConfig):
                     right_hand_joints = np.asarray(
                         get_action_field(processed_action, "right_hand_joints"),
                         dtype=np.float32,
+                    )
+                    left_hand_joints = _validate_hand_action(
+                        "left_hand_joints", left_hand_joints
+                    )
+                    right_hand_joints = _validate_hand_action(
+                        "right_hand_joints", right_hand_joints
                     )
 
                     # Action arrays arrive as (B, T, D) from the model.

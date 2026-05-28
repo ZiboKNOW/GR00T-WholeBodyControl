@@ -25,12 +25,12 @@
  *   body_q               | double[29]   | Joint positions (MuJoCo order + default offsets).
  *   body_dq              | double[29]   | Joint velocities (MuJoCo order).
  *   last_action          | double[29]   | Last policy action (MuJoCo order, scaled + offset).
- *   left_hand_q          | double[7]    | Left-hand joint positions.
- *   left_hand_dq         | double[7]    | Left-hand joint velocities.
- *   right_hand_q         | double[7]    | Right-hand joint positions.
- *   right_hand_dq        | double[7]    | Right-hand joint velocities.
- *   last_left_hand_action| double[7]    | Last left-hand action.
- *   last_right_hand_action| double[7]   | Last right-hand action.
+ *   left_hand_q          | double[6]    | Left-hand joint positions.
+ *   left_hand_dq         | double[6]    | Left-hand joint velocities.
+ *   right_hand_q         | double[6]    | Right-hand joint positions.
+ *   right_hand_dq        | double[6]    | Right-hand joint velocities.
+ *   last_left_hand_action| double[6]    | Last left-hand action.
+ *   last_right_hand_action| double[6]   | Last right-hand action.
  *   token_state          | double[N]    | Encoder token state (empty if not available).
  *   init_base_quat       | double[4]    | Initial base quaternion (if heading state available).
  *   delta_heading        | double       | Delta heading (if heading state available).
@@ -164,8 +164,8 @@ public:
         const std::array<double, 9>& vr_3point_position,
         const std::array<double, 12>& vr_3point_orientation,
         const std::array<double, 3>& vr_3point_compliance,
-        const std::array<double, 7>& left_hand_joint,
-        const std::array<double, 7>& right_hand_joint,
+        const hand::HandJointArray& left_hand_joint,
+        const hand::HandJointArray& right_hand_joint,
         const std::array<double, 4>& init_ref_data_root_rot_array,
         DataBuffer<HeadingState>& heading_state_buffer,
         std::shared_ptr<const MotionSequence> current_motion,
@@ -481,7 +481,7 @@ private:
             }
         }
         
-        // Pack left_hand_q (7 doubles)
+        // Pack left_hand_q (6 doubles)
         pk.pack("left_hand_q");
         pk.pack_array(state.left_hand_q.size());
         for (const auto& val : state.left_hand_q) {
@@ -495,7 +495,7 @@ private:
             pk.pack(val);
         }
         
-        // Pack right_hand_q (7 doubles)
+        // Pack right_hand_q (6 doubles)
         pk.pack("right_hand_q");
         pk.pack_array(state.right_hand_q.size());
         for (const auto& val : state.right_hand_q) {
@@ -558,4 +558,3 @@ private:
 #endif // HAS_ROS2
 
 #endif // ROS2_OUTPUT_HANDLER_HPP
-
