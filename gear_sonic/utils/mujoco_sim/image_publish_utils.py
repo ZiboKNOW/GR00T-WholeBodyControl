@@ -127,12 +127,13 @@ class ImagePublishProcess:
         shared_memory_info, image_dt, zmq_port, stop_event, data_ready_event, verbose
     ):
         """Worker function that runs in the subprocess"""
+        sensor_server = None
+        shm_blocks = {}
         try:
             sensor_server = SensorServer()
             sensor_server.start_server(port=zmq_port)
 
             shared_arrays = {}
-            shm_blocks = {}
             for camera_name, info in shared_memory_info.items():
                 shm = shared_memory.SharedMemory(name=info["name"])
                 shm_blocks[camera_name] = shm
@@ -196,6 +197,7 @@ class ImagePublishProcess:
             try:
                 for shm in shm_blocks.values():
                     shm.close()
-                sensor_server.stop_server()
+                if sensor_server is not None:
+                    sensor_server.stop_server()
             except Exception as e:
                 print(f"Error during subprocess cleanup: {e}")

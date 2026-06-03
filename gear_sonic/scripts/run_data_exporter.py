@@ -34,6 +34,8 @@ from gear_sonic.data.exporter import Gr00tDataExporter
 from gear_sonic.data.features_sonic_vla import (
     get_features_sonic_vla,
     get_g1_robot_model,
+    get_global_view_camera_features,
+    get_global_view_camera_modality_config,
     get_modality_config_sonic_vla,
     get_wrist_camera_features,
     get_wrist_camera_modality_config,
@@ -99,6 +101,9 @@ class SonicDataExporterConfig:
 
     record_wrist_cameras: bool = False
     """Record wrist camera streams (left_wrist, right_wrist). Requires cameras to be available."""
+
+    record_global_view: bool = True
+    """Record the fixed overview (god's-eye) camera in addition to ego_view (head camera)."""
 
     text_to_speech: bool = True
     """Use text-to-speech voice feedback."""
@@ -924,6 +929,16 @@ def main(config: SonicDataExporterConfig):
             else:
                 modality_config[key] = value
 
+    if config.record_global_view:
+        print("[Camera] Global overview camera enabled — adding to dataset schema")
+        dataset_features.update(get_global_view_camera_features())
+        global_modality = get_global_view_camera_modality_config()
+        for key, value in global_modality.items():
+            if key in modality_config:
+                modality_config[key].update(value)
+            else:
+                modality_config[key] = value
+
     text_to_speech = TextToSpeech() if config.text_to_speech else None
 
     robot_config = poll_robot_config_zmq(
@@ -936,7 +951,11 @@ def main(config: SonicDataExporterConfig):
         features=dataset_features,
         modality_config=modality_config,
         task=config.task_prompt,
-        script_config={**robot_config, "record_wrist_cameras": config.record_wrist_cameras},
+        script_config={
+            **robot_config,
+            "record_wrist_cameras": config.record_wrist_cameras,
+            "record_global_view": config.record_global_view,
+        },
     )
 
     data_collector = GrootDataCollector(

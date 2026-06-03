@@ -44,7 +44,18 @@ class SensorServer:
         self.socket = self.context.socket(zmq.PUB)
         self.socket.setsockopt(zmq.SNDHWM, 20)
         self.socket.setsockopt(zmq.LINGER, 0)
-        self.socket.bind(f"tcp://*:{port}")
+        if hasattr(zmq, "REUSEADDR"):
+            self.socket.setsockopt(zmq.REUSEADDR, 1)
+        try:
+            self.socket.bind(f"tcp://*:{port}")
+        except zmq.ZMQError as exc:
+            if exc.errno == zmq.EADDRINUSE:
+                raise zmq.ZMQError(
+                    exc.errno,
+                    f"Camera port {port} is already in use. "
+                    f"Stop the other process or pass --camera-port with a free port.",
+                ) from exc
+            raise
         print(f"Sensor server running at tcp://*:{port}")
 
         self.message_sent = 0
