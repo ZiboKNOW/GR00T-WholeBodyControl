@@ -42,12 +42,17 @@ def _get_joint_group_slices(robot_model: RobotModel) -> dict[str, dict[str, int]
     return slices
 
 
+def _hand_teleop_dof(robot_model: RobotModel) -> int:
+    return len(robot_model.supplemental_info.left_hand_actuated_joints)
+
+
 def get_modality_config_sonic_vla(robot_model: RobotModel) -> dict:
     """Return the modality config for the Sonic VLA dataset.
 
     Produces the exact content of meta/modality.json.
     """
     group_slices = _get_joint_group_slices(robot_model)
+    hand_dof = _hand_teleop_dof(robot_model)
 
     return {
         "state": {
@@ -133,12 +138,12 @@ def get_modality_config_sonic_vla(robot_model: RobotModel) -> dict:
             },
             "left_hand_joints": {
                 "start": 0,
-                "end": 7,
+                "end": hand_dof,
                 "original_key": "teleop.left_hand_joints",
             },
             "right_hand_joints": {
                 "start": 0,
-                "end": 7,
+                "end": hand_dof,
                 "original_key": "teleop.right_hand_joints",
             },
             "left_wrist_joints": {
@@ -209,6 +214,7 @@ def get_features_sonic_vla(robot_model: RobotModel) -> dict:
     """
     joint_names = robot_model.joint_names
     num_joints = robot_model.num_joints
+    hand_dof = _hand_teleop_dof(robot_model)
 
     return {
         "observation.images.ego_view": {
@@ -295,12 +301,12 @@ def get_features_sonic_vla(robot_model: RobotModel) -> dict:
         },
         "teleop.left_hand_joints": {
             "dtype": "float32",
-            "shape": (7,),
+            "shape": (hand_dof,),
             "names": "left_hand_joints",
         },
         "teleop.right_hand_joints": {
             "dtype": "float32",
-            "shape": (7,),
+            "shape": (hand_dof,),
             "names": "right_hand_joints",
         },
         "teleop.smpl_frame_index": {

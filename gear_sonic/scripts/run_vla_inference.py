@@ -180,7 +180,7 @@ class InferenceConfig:
     """The port of the Isaac-GR00T PolicyServer."""
 
     # Control
-    action_publish_rate: int = 50
+    action_publish_rate: int = 100
     """Rate at which individual actions are published to the C++ control loop (Hz)."""
 
     action_horizon: int = 40

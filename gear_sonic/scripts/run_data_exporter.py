@@ -23,6 +23,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 import json
+from pathlib import Path
 import time
 
 import numpy as np
@@ -45,7 +46,10 @@ from gear_sonic.utils.data_collection.episode_state import EpisodeState
 from gear_sonic.utils.data_collection.keyboard_subscriber import ZMQKeyboardSubscriber
 from gear_sonic.utils.data_collection.telemetry import Telemetry
 from gear_sonic.utils.data_collection.text_to_speech import TextToSpeech
-from gear_sonic.utils.data_collection.transforms import compute_projected_gravity, quat_to_rot6d
+from gear_sonic.utils.data_collection.transforms import (
+    compute_projected_gravity,
+    quat_to_rot6d,
+)
 from gear_sonic.utils.data_collection.zmq_state_subscriber import (
     ZMQStateSubscriber,
     poll_robot_config_zmq,
@@ -54,6 +58,10 @@ from gear_sonic.utils.data_collection.zmq_state_subscriber import (
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
+_DEFAULT_ROOT_OUTPUT_DIR = str(
+    Path(__file__).resolve().parents[3] / "outputs" / "vla_sim_videos"
+)
 
 
 @dataclass
@@ -67,8 +75,8 @@ class SonicDataExporterConfig:
     task_prompt: str = "demo"
     """Language task prompt."""
 
-    root_output_dir: str = "outputs"
-    """Root output directory."""
+    root_output_dir: str = _DEFAULT_ROOT_OUTPUT_DIR
+    """Root output directory (default: <workspace>/outputs/vla_sim_videos)."""
 
     data_collection_frequency: int = 50
     """Data collection frequency (Hz)."""
@@ -99,7 +107,7 @@ class SonicDataExporterConfig:
     robot_config_timeout: float = 0
     """Seconds to wait for the ZMQ robot_config message at startup (0 = wait forever)."""
 
-    record_wrist_cameras: bool = False
+    record_wrist_cameras: bool = True
     """Record wrist camera streams (left_wrist, right_wrist). Requires cameras to be available."""
 
     record_global_view: bool = True
@@ -238,6 +246,7 @@ class GrootDataCollector:
         self.loop_period = 1.0 / frequency
         self.data_exporter = data_exporter
         self.robot_model = robot_model
+        self._hand_dof = len(robot_model.supplemental_info.left_hand_actuated_joints)
 
         self._episode_state = EpisodeState()
         self._keyboard_listener = ZMQKeyboardSubscriber()
@@ -497,14 +506,13 @@ class GrootDataCollector:
             if self._sonic_error_count == 1 or self._sonic_error_count % 100 == 0:
                 print(f"[Sonic] Error processing pose message: {e}")
 
-    @staticmethod
-    def _extract_hand_joints(pose_data: dict, key: str) -> np.ndarray:
+    def _extract_hand_joints(self, pose_data: dict, key: str) -> np.ndarray:
         arr = pose_data.get(key)
         if arr is not None:
             if arr.ndim > 1:
                 arr = arr[0]
             return arr.astype(np.float32)
-        return np.zeros(7, dtype=np.float32)
+        return np.zeros(self._hand_dof, dtype=np.float32)
 
     @staticmethod
     def _extract_bool(pose_data: dict, key: str) -> bool:
@@ -581,15 +589,20 @@ class GrootDataCollector:
         assert self.latest_proprio_msg is not None
         proprio = self.latest_proprio_msg
 
+        left_hand_q = proprio["left_hand_q"]
+        right_hand_q = proprio["right_hand_q"]
+        last_left_hand_action = proprio["last_left_hand_action"]
+        last_right_hand_action = proprio["last_right_hand_action"]
+
         whole_q = self.robot_model.get_configuration_from_actuated_joints(
             body_actuated_joint_values=proprio["body_q"],
-            left_hand_actuated_joint_values=proprio["left_hand_q"],
-            right_hand_actuated_joint_values=proprio["right_hand_q"],
+            left_hand_actuated_joint_values=left_hand_q,
+            right_hand_actuated_joint_values=right_hand_q,
         )
         whole_action_wbc = self.robot_model.get_configuration_from_actuated_joints(
             body_actuated_joint_values=proprio["last_action"],
-            left_hand_actuated_joint_values=proprio["last_left_hand_action"],
-            right_hand_actuated_joint_values=proprio["last_right_hand_action"],
+            left_hand_actuated_joint_values=last_left_hand_action,
+            right_hand_actuated_joint_values=last_right_hand_action,
         )
 
         self.robot_model.cache_forward_kinematics(whole_q)
@@ -762,13 +775,13 @@ class GrootDataCollector:
             hand_msg["left_hand_joints"].astype(np.float32)
             if hand_msg is not None
             and hand_msg.get("left_hand_joints") is not None
-            else np.zeros(7, dtype=np.float32)
+            else np.zeros(self._hand_dof, dtype=np.float32)
         )
         frame_data["teleop.right_hand_joints"] = (
             hand_msg["right_hand_joints"].astype(np.float32)
             if hand_msg is not None
             and hand_msg.get("right_hand_joints") is not None
-            else np.zeros(7, dtype=np.float32)
+            else np.zeros(self._hand_dof, dtype=np.float32)
         )
 
         # Planner command fields
