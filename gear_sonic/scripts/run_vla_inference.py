@@ -78,7 +78,7 @@ class InferenceConfig:
     """The port of the Isaac-GR00T PolicyServer."""
 
     # Control
-    action_publish_rate: int = 50
+    action_publish_rate: int = 100
     """Rate at which individual actions are published to the C++ control loop (Hz)."""
 
     action_horizon: int = 40
@@ -248,7 +248,7 @@ def prepare_observation_from_sensors(
     if "left_wrist" in camera_msg["images"]:
         video["left_wrist"] = camera_msg["images"]["left_wrist"][np.newaxis, np.newaxis]
     if "right_wrist" in camera_msg["images"]:
-        video["wrist_view"] = camera_msg["images"]["right_wrist"][np.newaxis, np.newaxis]
+        video["right_wrist"] = camera_msg["images"]["right_wrist"][np.newaxis, np.newaxis]
 
     observation = {
         "video": video,

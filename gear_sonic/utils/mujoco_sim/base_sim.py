@@ -72,6 +72,8 @@ class DefaultEnv:
         if not camera_configs and offscreen and enable_image_publish:
             self.camera_configs = {
                 "ego_view": {"height": 480, "width": 640, "mjcf_name": "head_camera"},
+                "left_wrist": {"height": 480, "width": 640, "mjcf_name": "left_wrist_camera"},
+                "right_wrist": {"height": 480, "width": 640, "mjcf_name": "right_wrist_camera"},
                 "global_view": {"height": 480, "width": 640, "mjcf_name": "global_view"},
             }
 

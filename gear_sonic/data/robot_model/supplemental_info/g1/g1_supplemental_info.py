@@ -25,6 +25,47 @@ class ElbowPose(Enum):
     HIGH = "high"
 
 
+class HandType(Enum):
+    """Enum for hand model variant."""
+
+    G1_THREE_FINGER = "g1_three_finger"
+    INSPIRE_DFQ = "inspire_dfq"
+
+
+_INSPIRE_LEFT_HAND_ACTUATED_JOINTS = [
+    "L_thumb_proximal_yaw_joint",
+    "L_thumb_proximal_pitch_joint",
+    "L_index_proximal_joint",
+    "L_middle_proximal_joint",
+    "L_ring_proximal_joint",
+    "L_pinky_proximal_joint",
+]
+
+_INSPIRE_RIGHT_HAND_ACTUATED_JOINTS = [
+    "R_thumb_proximal_yaw_joint",
+    "R_thumb_proximal_pitch_joint",
+    "R_index_proximal_joint",
+    "R_middle_proximal_joint",
+    "R_ring_proximal_joint",
+    "R_pinky_proximal_joint",
+]
+
+_INSPIRE_HAND_JOINT_LIMITS = {
+    "L_thumb_proximal_yaw_joint": [-0.1, 1.3],
+    "L_thumb_proximal_pitch_joint": [-0.1, 0.6],
+    "L_index_proximal_joint": [0.0, 1.7],
+    "L_middle_proximal_joint": [0.0, 1.7],
+    "L_ring_proximal_joint": [0.0, 1.7],
+    "L_pinky_proximal_joint": [0.0, 1.7],
+    "R_thumb_proximal_yaw_joint": [-0.1, 1.3],
+    "R_thumb_proximal_pitch_joint": [-0.1, 0.6],
+    "R_index_proximal_joint": [0.0, 1.7],
+    "R_middle_proximal_joint": [0.0, 1.7],
+    "R_ring_proximal_joint": [0.0, 1.7],
+    "R_pinky_proximal_joint": [0.0, 1.7],
+}
+
+
 @dataclass
 class G1SupplementalInfo(RobotSupplementalInfo):
     """
@@ -39,8 +80,13 @@ class G1SupplementalInfo(RobotSupplementalInfo):
         self,
         waist_location: WaistLocation = WaistLocation.LOWER_BODY,
         elbow_pose: ElbowPose = ElbowPose.LOW,
+        hand_type: HandType = HandType.G1_THREE_FINGER,
     ):
-        name = "G1_G1ThreeFinger"
+        name = (
+            "G1_G1InspireDFQ"
+            if hand_type == HandType.INSPIRE_DFQ
+            else "G1_G1ThreeFinger"
+        )
 
         # Define all actuated joints
         body_actuated_joints = [
@@ -80,27 +126,28 @@ class G1SupplementalInfo(RobotSupplementalInfo):
             "right_wrist_yaw_joint",
         ]
 
-        left_hand_actuated_joints = [
-            # Left hand
-            "left_hand_thumb_0_joint",
-            "left_hand_thumb_1_joint",
-            "left_hand_thumb_2_joint",
-            "left_hand_index_0_joint",
-            "left_hand_index_1_joint",
-            "left_hand_middle_0_joint",
-            "left_hand_middle_1_joint",
-        ]
-
-        right_hand_actuated_joints = [
-            # Right hand
-            "right_hand_thumb_0_joint",
-            "right_hand_thumb_1_joint",
-            "right_hand_thumb_2_joint",
-            "right_hand_index_0_joint",
-            "right_hand_index_1_joint",
-            "right_hand_middle_0_joint",
-            "right_hand_middle_1_joint",
-        ]
+        if hand_type == HandType.INSPIRE_DFQ:
+            left_hand_actuated_joints = list(_INSPIRE_LEFT_HAND_ACTUATED_JOINTS)
+            right_hand_actuated_joints = list(_INSPIRE_RIGHT_HAND_ACTUATED_JOINTS)
+        else:
+            left_hand_actuated_joints = [
+                "left_hand_thumb_0_joint",
+                "left_hand_thumb_1_joint",
+                "left_hand_thumb_2_joint",
+                "left_hand_index_0_joint",
+                "left_hand_index_1_joint",
+                "left_hand_middle_0_joint",
+                "left_hand_middle_1_joint",
+            ]
+            right_hand_actuated_joints = [
+                "right_hand_thumb_0_joint",
+                "right_hand_thumb_1_joint",
+                "right_hand_thumb_2_joint",
+                "right_hand_index_0_joint",
+                "right_hand_index_1_joint",
+                "right_hand_middle_0_joint",
+                "right_hand_middle_1_joint",
+            ]
 
         # Define joint limits from URDF
         joint_limits = {
@@ -138,23 +185,28 @@ class G1SupplementalInfo(RobotSupplementalInfo):
             "right_wrist_roll_joint": [-1.972222054, 1.972222054],
             "right_wrist_pitch_joint": [-1.614429558, 1.614429558],
             "right_wrist_yaw_joint": [-1.614429558, 1.614429558],
-            # Left hand
-            "left_hand_thumb_0_joint": [-1.04719755, 1.04719755],
-            "left_hand_thumb_1_joint": [-0.72431163, 1.04719755],
-            "left_hand_thumb_2_joint": [0, 1.74532925],
-            "left_hand_index_0_joint": [-1.57079632, 0],
-            "left_hand_index_1_joint": [-1.74532925, 0],
-            "left_hand_middle_0_joint": [-1.57079632, 0],
-            "left_hand_middle_1_joint": [-1.74532925, 0],
-            # Right hand
-            "right_hand_thumb_0_joint": [-1.04719755, 1.04719755],
-            "right_hand_thumb_1_joint": [-0.72431163, 1.04719755],
-            "right_hand_thumb_2_joint": [0, 1.74532925],
-            "right_hand_index_0_joint": [-1.57079632, 0],
-            "right_hand_index_1_joint": [-1.74532925, 0],
-            "right_hand_middle_0_joint": [-1.57079632, 0],
-            "right_hand_middle_1_joint": [-1.74532925, 0],
         }
+        if hand_type == HandType.INSPIRE_DFQ:
+            joint_limits.update(_INSPIRE_HAND_JOINT_LIMITS)
+        else:
+            joint_limits.update(
+                {
+                    "left_hand_thumb_0_joint": [-1.04719755, 1.04719755],
+                    "left_hand_thumb_1_joint": [-0.72431163, 1.04719755],
+                    "left_hand_thumb_2_joint": [0, 1.74532925],
+                    "left_hand_index_0_joint": [-1.57079632, 0],
+                    "left_hand_index_1_joint": [-1.74532925, 0],
+                    "left_hand_middle_0_joint": [-1.57079632, 0],
+                    "left_hand_middle_1_joint": [-1.74532925, 0],
+                    "right_hand_thumb_0_joint": [-1.04719755, 1.04719755],
+                    "right_hand_thumb_1_joint": [-0.72431163, 1.04719755],
+                    "right_hand_thumb_2_joint": [0, 1.74532925],
+                    "right_hand_index_0_joint": [-1.57079632, 0],
+                    "right_hand_index_1_joint": [-1.74532925, 0],
+                    "right_hand_middle_0_joint": [-1.57079632, 0],
+                    "right_hand_middle_1_joint": [-1.74532925, 0],
+                }
+            )
 
         # Define joint groups
         joint_groups = {
@@ -215,27 +267,35 @@ class G1SupplementalInfo(RobotSupplementalInfo):
             "arms": {"joints": [], "groups": ["left_arm", "right_arm"]},
             # Hand groups
             "left_hand": {
-                "joints": [
-                    "left_hand_index_0_joint",
-                    "left_hand_index_1_joint",
-                    "left_hand_middle_0_joint",
-                    "left_hand_middle_1_joint",
-                    "left_hand_thumb_0_joint",
-                    "left_hand_thumb_1_joint",
-                    "left_hand_thumb_2_joint",
-                ],
+                "joints": (
+                    list(_INSPIRE_LEFT_HAND_ACTUATED_JOINTS)
+                    if hand_type == HandType.INSPIRE_DFQ
+                    else [
+                        "left_hand_index_0_joint",
+                        "left_hand_index_1_joint",
+                        "left_hand_middle_0_joint",
+                        "left_hand_middle_1_joint",
+                        "left_hand_thumb_0_joint",
+                        "left_hand_thumb_1_joint",
+                        "left_hand_thumb_2_joint",
+                    ]
+                ),
                 "groups": [],
             },
             "right_hand": {
-                "joints": [
-                    "right_hand_index_0_joint",
-                    "right_hand_index_1_joint",
-                    "right_hand_middle_0_joint",
-                    "right_hand_middle_1_joint",
-                    "right_hand_thumb_0_joint",
-                    "right_hand_thumb_1_joint",
-                    "right_hand_thumb_2_joint",
-                ],
+                "joints": (
+                    list(_INSPIRE_RIGHT_HAND_ACTUATED_JOINTS)
+                    if hand_type == HandType.INSPIRE_DFQ
+                    else [
+                        "right_hand_index_0_joint",
+                        "right_hand_index_1_joint",
+                        "right_hand_middle_0_joint",
+                        "right_hand_middle_1_joint",
+                        "right_hand_thumb_0_joint",
+                        "right_hand_thumb_1_joint",
+                        "right_hand_thumb_2_joint",
+                    ]
+                ),
                 "groups": [],
             },
             "hands": {"joints": [], "groups": ["left_hand", "right_hand"]},
