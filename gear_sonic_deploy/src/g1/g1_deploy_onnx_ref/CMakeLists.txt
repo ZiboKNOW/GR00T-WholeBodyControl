@@ -27,7 +27,10 @@ endif()
 # Find msgpack for message serialization (used by ROS2 and ZMQ handlers)
 # msgpack is header-only and doesn't provide pkg-config, so we check for the header directly
 find_path(MSGPACK_INCLUDE_DIR msgpack.hpp
-  PATHS /usr/include /usr/local/include
+  PATHS
+    /usr/include
+    /usr/local/include
+    "$ENV{HOME}/.local/include"
   DOC "msgpack C++ header location"
 )
 
@@ -40,6 +43,11 @@ endif()
 
 file(GLOB_RECURSE PROJECT_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 list(REMOVE_ITEM PROJECT_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/g1_deploy_onnx_ref.cpp)
+
+set(GEAR_SONIC_THREAD_LIBS Threads::Threads)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  list(APPEND GEAR_SONIC_THREAD_LIBS pthread)
+endif()
 
 
 # Optional AddressSanitizer support
@@ -128,9 +136,19 @@ if(PkgConfig)
 endif()
 
 find_path(ZMQ_INCLUDE_DIR zmq.h
-  PATHS /usr/include /usr/local/include)
+  PATHS
+    /usr/include
+    /usr/local/include
+    "$ENV{HOME}/.local/zeromq-env/include"
+)
 find_library(ZMQ_LIBRARY zmq
-  PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu)
+  PATHS
+    /usr/lib
+    /usr/local/lib
+    /usr/lib/x86_64-linux-gnu
+    /usr/lib/aarch64-linux-gnu
+    "$ENV{HOME}/.local/zeromq-env/lib"
+)
 
 if(NOT ZMQ_INCLUDE_DIR OR NOT ZMQ_LIBRARY)
   message(FATAL_ERROR "❌ libzmq is required but not found. Please install libzmq-dev (apt) or zeromq (brew)")
@@ -177,6 +195,7 @@ set(EXE_INCLUDES
   ${CMAKE_CURRENT_SOURCE_DIR}/include/
   ${ZMQ_INCLUDE_DIR}
   ${EIGEN3_INCLUDE_DIR}
+  ${MSGPACK_INCLUDE_DIRS}
 )
 
 
@@ -194,12 +213,17 @@ set(EXE_LIBS
   ${TensorRT_nvinfer_LIBRARY} ${TensorRT_nvonnxparser_LIBRARY}
   ${CUDLA_LIBRARY}
   ${ZMQ_LIBRARY}
+  ${GEAR_SONIC_THREAD_LIBS}
 )
 
 
 # build the main executable:
 add_executable(${EXECUTABLE_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/src/g1_deploy_onnx_ref.cpp)
-target_include_directories(${EXECUTABLE_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/ ${PROJECT_SOURCE_DIR}/src)
+target_include_directories(${EXECUTABLE_NAME} PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/
+  ${PROJECT_SOURCE_DIR}/src
+  ${EXE_INCLUDES}
+)
 
 target_link_directories(${EXECUTABLE_NAME} PRIVATE ${CUDA_LINK_DIRS})
 target_link_libraries(
@@ -232,30 +256,34 @@ else()
   message(STATUS "ROS2 not found - building without ROS2InputHandler support")
 endif()
 
-# test executable:
-include(FetchContent)
+# Optional unit tests (off by default — deployment only needs g1_deploy_onnx_ref).
+option(GEAR_SONIC_BUILD_TESTS "Build g1_deploy unit tests (run_tests)" OFF)
 
-# Download and make GoogleTest available
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-)
-FetchContent_MakeAvailable(googletest)
+if(GEAR_SONIC_BUILD_TESTS)
+  include(FetchContent)
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  )
+  FetchContent_MakeAvailable(googletest)
 
-find_package(GTest REQUIRED)
+  file(GLOB_RECURSE TEST_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests/*.cpp)
 
-file(GLOB_RECURSE TEST_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests/*.cpp)
+  add_executable(run_tests ${TEST_SRCS})
+  target_link_directories(run_tests PRIVATE ${CUDA_LINK_DIRS})
+  target_link_libraries(run_tests ${EXE_LIBS} GTest::gtest_main)
+  target_include_directories(run_tests PUBLIC ${EXE_INCLUDES})
 
-add_executable(run_tests ${TEST_SRCS})
-target_link_directories(run_tests PRIVATE ${CUDA_LINK_DIRS})
-target_link_libraries(run_tests GTest::GTest GTest::Main ${EXE_LIBS})
-target_include_directories(run_tests PUBLIC ${EXE_INCLUDES})
-
-# Setting our output directory and C++ standard
-set_target_properties(
-  run_tests
-  PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/target/release/"
-             OUTPUT_NAME run_tests
-             CXX_STANDARD 20
-             CXX_STANDARD_REQUIRED ON
-             CXX_EXTENSIONS OFF)
+  set_target_properties(
+    run_tests
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/target/release/"
+               OUTPUT_NAME run_tests
+               CXX_STANDARD 20
+               CXX_STANDARD_REQUIRED ON
+               CXX_EXTENSIONS OFF)
+  message(STATUS "Unit tests enabled (run_tests)")
+else()
+  message(STATUS "Unit tests disabled (GEAR_SONIC_BUILD_TESTS=OFF)")
+endif()

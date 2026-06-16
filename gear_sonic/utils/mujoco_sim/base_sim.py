@@ -27,6 +27,23 @@ from gear_sonic.utils.mujoco_sim.unitree_sdk2py_bridge import ElasticBand, Unitr
 from gear_sonic.utils.mujoco_sim.robot import Robot
 
 GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+INSPIRE_PASSIVE_HAND_MIMIC = {
+    "thumb_intermediate": (1, 1.6),
+    "thumb_distal": (1, 2.4),
+    "index_intermediate": (2, 1.0),
+    "middle_intermediate": (3, 1.0),
+    "ring_intermediate": (4, 1.0),
+    "pinky_intermediate": (5, 1.0),
+}
+
+
+def _rotation_from_mujoco_quat(quat_wxyz: np.ndarray) -> Rotation:
+    """Convert MuJoCo wxyz quaternion to scipy Rotation, tolerating invalid states."""
+    quat_xyzw = np.array([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]], dtype=np.float64)
+    norm = np.linalg.norm(quat_xyzw)
+    if norm < 1e-8:
+        return Rotation.identity()
+    return Rotation.from_quat(quat_xyzw / norm)
 
 
 class DefaultEnv:
@@ -55,11 +72,13 @@ class DefaultEnv:
         if not camera_configs and offscreen and enable_image_publish:
             self.camera_configs = {
                 "ego_view": {"height": 480, "width": 640, "mjcf_name": "head_camera"},
+                "global_view": {"height": 480, "width": 640, "mjcf_name": "global_view"},
             }
 
         self.reward_lock = Lock()
         self.unitree_bridge = None
         self.onscreen = onscreen
+        self.elastic_band = None
 
         self.init_scene()
         self.last_reward = 0
@@ -225,8 +244,19 @@ class DefaultEnv:
         self.body_joint_index = []
         self.left_hand_index = []
         self.right_hand_index = []
+        left_hand_prefix = self.config.get("LEFT_HAND_JOINT_PREFIX", "left_hand")
+        right_hand_prefix = self.config.get("RIGHT_HAND_JOINT_PREFIX", "right_hand")
+
+        def _is_independent_hand_joint(joint_name: str, prefix: str) -> bool:
+            if joint_name.startswith(prefix):
+                # Inspire MJCF lists mimic joints as separate DoF; only count actuated primaries.
+                return "intermediate" not in joint_name and "distal" not in joint_name
+            return prefix in joint_name
+
         for i in range(self.mj_model.njnt):
             name = self.mj_model.joint(i).name
+            if name == "floating_base_joint":
+                continue
             if any(
                 [
                     part_name in name
@@ -234,9 +264,9 @@ class DefaultEnv:
                 ]
             ):
                 self.body_joint_index.append(i)
-            elif "left_hand" in name:
+            elif _is_independent_hand_joint(name, left_hand_prefix):
                 self.left_hand_index.append(i)
-            elif "right_hand" in name:
+            elif _is_independent_hand_joint(name, right_hand_prefix):
                 self.right_hand_index.append(i)
 
         assert len(self.body_joint_index) == self.robot.NUM_JOINTS
@@ -246,6 +276,60 @@ class DefaultEnv:
         self.body_joint_index = np.array(self.body_joint_index)
         self.left_hand_index = np.array(self.left_hand_index)
         self.right_hand_index = np.array(self.right_hand_index)
+
+        if len(self.torque_limit) != self.mj_model.nu:
+            limits = np.ones(self.mj_model.nu)
+            for i in range(self.mj_model.nu):
+                if self.mj_model.actuator_forcelimited[i]:
+                    limits[i] = max(
+                        abs(self.mj_model.actuator_forcerange[i, 0]),
+                        abs(self.mj_model.actuator_forcerange[i, 1]),
+                    )
+                elif i < len(self.torque_limit):
+                    limits[i] = self.torque_limit[i]
+            self.torque_limit = limits
+        self.torques = np.zeros(self.mj_model.nu)
+        self.passive_hand_mimic_actuators = self._collect_passive_hand_mimic_actuators()
+
+    def _collect_passive_hand_mimic_actuators(self):
+        mimic_actuators = []
+        for i in range(self.mj_model.nu):
+            name = self.mj_model.actuator(i).name
+            is_left = name.startswith("L_")
+            if not (is_left or name.startswith("R_")):
+                continue
+            for pattern, (src_idx, multiplier) in INSPIRE_PASSIVE_HAND_MIMIC.items():
+                if pattern in name:
+                    mimic_actuators.append((i, is_left, src_idx, multiplier))
+                    break
+        return mimic_actuators
+
+    def _apply_passive_hand_joint_mimic(self):
+        for act_i, is_left, src_idx, multiplier in self.passive_hand_mimic_actuators:
+            if self.unitree_bridge is not None:
+                received_name = "left_hand_cmd_received" if is_left else "right_hand_cmd_received"
+                if not getattr(self.unitree_bridge, received_name, False):
+                    continue
+            source_joints = self.left_hand_index if is_left else self.right_hand_index
+            if src_idx >= len(source_joints):
+                continue
+            src_joint_id = int(source_joints[src_idx])
+            src_qadr = self.mj_model.jnt_qposadr[src_joint_id]
+            src_vadr = self.mj_model.jnt_dofadr[src_joint_id]
+
+            joint_id = self.mj_model.actuator_trnid[act_i, 0]
+            qadr = self.mj_model.jnt_qposadr[joint_id]
+            vadr = self.mj_model.jnt_dofadr[joint_id]
+            q = self.mj_data.qpos[src_qadr] * multiplier
+            if self.mj_model.jnt_limited[joint_id]:
+                q = np.clip(
+                    q,
+                    self.mj_model.jnt_range[joint_id, 0],
+                    self.mj_model.jnt_range[joint_id, 1],
+                )
+            self.mj_data.qpos[qadr] = q
+            self.mj_data.qvel[vadr] = self.mj_data.qvel[src_vadr] * multiplier
+            self.torques[act_i] = 0.0
 
     def init_renderers(self):
         self.renderers = {}
@@ -289,10 +373,14 @@ class DefaultEnv:
 
     def get_head_pose(self) -> np.ndarray:
         root_pos = self.mj_data.body("torso_link").xpos.copy()
-        # Reorder quaternion from MuJoCo [w,x,y,z] to scipy [x,y,z,w]
-        root_quat = self.mj_data.body("torso_link").xquat.copy()[[1, 2, 3, 0]]
-        head_pos = root_pos + Rotation.from_quat(root_quat).apply(np.array([0.0, 0.0, -0.044]))
-        return np.concatenate((head_pos, root_quat))
+        root_quat_wxyz = self.mj_data.body("torso_link").xquat.copy()
+        head_pos = root_pos + _rotation_from_mujoco_quat(root_quat_wxyz).apply(
+            np.array([0.0, 0.0, -0.044])
+        )
+        root_quat_xyzw = root_quat_wxyz[[1, 2, 3, 0]]
+        if np.linalg.norm(root_quat_xyzw) < 1e-8:
+            root_quat_xyzw = np.array([0.0, 0.0, 0.0, 1.0])
+        return np.concatenate((head_pos, root_quat_xyzw))
 
     def get_root_vel(self) -> np.ndarray:
         return self.mj_data.qvel[:6]
@@ -300,34 +388,38 @@ class DefaultEnv:
     def compute_hand_torques(self) -> np.ndarray:
         left_hand_torques = np.zeros(self.num_hand_dof)
         right_hand_torques = np.zeros(self.num_hand_dof)
-        if self.unitree_bridge is not None and self.unitree_bridge.low_cmd:
-            for i in range(self.unitree_bridge.num_hand_motor):
-                left_hand_torques[i] = (
-                    self.unitree_bridge.left_hand_cmd.motor_cmd[i].tau
-                    + self.unitree_bridge.left_hand_cmd.motor_cmd[i].kp
-                    * (
-                        self.unitree_bridge.left_hand_cmd.motor_cmd[i].q
-                        - self.mj_data.qpos[self.left_hand_index[i] + self.qpos_offset - 1]
+        if self.unitree_bridge is not None:
+            num_hand_ctrl = min(self.unitree_bridge.num_hand_motor, self.num_hand_dof)
+            if getattr(self.unitree_bridge, "left_hand_cmd_received", False):
+                for i in range(num_hand_ctrl):
+                    left_hand_torques[i] = (
+                        self.unitree_bridge.left_hand_cmd.motor_cmd[i].tau
+                        + self.unitree_bridge.left_hand_cmd.motor_cmd[i].kp
+                        * (
+                            self.unitree_bridge.left_hand_cmd.motor_cmd[i].q
+                            - self.mj_data.qpos[self.left_hand_index[i] + self.qpos_offset - 1]
+                        )
+                        + self.unitree_bridge.left_hand_cmd.motor_cmd[i].kd
+                        * (
+                            self.unitree_bridge.left_hand_cmd.motor_cmd[i].dq
+                            - self.mj_data.qvel[self.left_hand_index[i] + self.qvel_offset - 1]
+                        )
                     )
-                    + self.unitree_bridge.left_hand_cmd.motor_cmd[i].kd
-                    * (
-                        self.unitree_bridge.left_hand_cmd.motor_cmd[i].dq
-                        - self.mj_data.qvel[self.left_hand_index[i] + self.qvel_offset - 1]
+            if getattr(self.unitree_bridge, "right_hand_cmd_received", False):
+                for i in range(num_hand_ctrl):
+                    right_hand_torques[i] = (
+                        self.unitree_bridge.right_hand_cmd.motor_cmd[i].tau
+                        + self.unitree_bridge.right_hand_cmd.motor_cmd[i].kp
+                        * (
+                            self.unitree_bridge.right_hand_cmd.motor_cmd[i].q
+                            - self.mj_data.qpos[self.right_hand_index[i] + self.qpos_offset - 1]
+                        )
+                        + self.unitree_bridge.right_hand_cmd.motor_cmd[i].kd
+                        * (
+                            self.unitree_bridge.right_hand_cmd.motor_cmd[i].dq
+                            - self.mj_data.qvel[self.right_hand_index[i] + self.qvel_offset - 1]
+                        )
                     )
-                )
-                right_hand_torques[i] = (
-                    self.unitree_bridge.right_hand_cmd.motor_cmd[i].tau
-                    + self.unitree_bridge.right_hand_cmd.motor_cmd[i].kp
-                    * (
-                        self.unitree_bridge.right_hand_cmd.motor_cmd[i].q
-                        - self.mj_data.qpos[self.right_hand_index[i] + self.qpos_offset - 1]
-                    )
-                    + self.unitree_bridge.right_hand_cmd.motor_cmd[i].kd
-                    * (
-                        self.unitree_bridge.right_hand_cmd.motor_cmd[i].dq
-                        - self.mj_data.qvel[self.right_hand_index[i] + self.qvel_offset - 1]
-                    )
-                )
         return np.concatenate((left_hand_torques, right_hand_torques))
 
     def compute_body_qpos(self) -> np.ndarray:
@@ -340,7 +432,11 @@ class DefaultEnv:
     def compute_hand_qpos(self) -> np.ndarray:
         hand_qpos = np.zeros(self.num_hand_dof * 2)
         if self.unitree_bridge is not None and self.unitree_bridge.low_cmd:
-            for i in range(self.unitree_bridge.num_hand_motor):
+            num_hand_ctrl = min(
+                self.unitree_bridge.num_hand_motor,
+                self.num_hand_dof,
+            )
+            for i in range(num_hand_ctrl):
                 hand_qpos[i] = self.unitree_bridge.left_hand_cmd.motor_cmd[i].q
                 hand_qpos[i + self.num_hand_dof] = self.unitree_bridge.right_hand_cmd.motor_cmd[i].q
         return hand_qpos
@@ -419,6 +515,8 @@ class DefaultEnv:
         if self.num_hand_dof > 0:
             self.torques[self.left_hand_index - 1] = hand_torques[: self.num_hand_dof]
             self.torques[self.right_hand_index - 1] = hand_torques[self.num_hand_dof :]
+        if self.passive_hand_mimic_actuators:
+            self._apply_passive_hand_joint_mimic()
 
         self.torques = np.clip(self.torques, -self.torque_limit, self.torque_limit)
 
@@ -428,6 +526,10 @@ class DefaultEnv:
         else:
             self.mj_data.ctrl = self.torques
         mujoco.mj_step(self.mj_model, self.mj_data)
+        if self.passive_hand_mimic_actuators:
+            self._apply_passive_hand_joint_mimic()
+        if self.num_hand_dof > 0 or self.passive_hand_mimic_actuators:
+            mujoco.mj_forward(self.mj_model, self.mj_data)
 
         self.check_fall()
 
@@ -498,12 +600,18 @@ class DefaultEnv:
         if self.elastic_band:
             self.elastic_band.handle_keyboard_button(key)
 
+        if key == "k":
+            self.release_elastic_band()
         if key == "backspace":
             self.reset()
         if key == "v":
             self.update_viewer_camera()
         if key in ["up", "down", "left", "right"]:
             self.apply_perturbation(key)
+
+    def release_elastic_band(self):
+        if self.elastic_band:
+            self.elastic_band.release()
 
     def check_fall(self):
         self.fall = False
@@ -547,6 +655,7 @@ class BaseSimulator:
         self.image_dt = self.config.get("IMAGE_DT", 0.033333)
         self.viewer_dt = self.config.get("VIEWER_DT", 0.02)
         self._running = True
+        self.keyboard_listener = None
 
         self.robot = Robot(self.config)
 
@@ -573,6 +682,14 @@ class BaseSimulator:
         self.init_subscriber()
         self.init_publisher()
 
+        if self.config.get("ENABLE_ELASTIC_BAND", False):
+            try:
+                from gear_sonic.utils.data_collection.keyboard_subscriber import ZMQKeyboardSubscriber
+
+                self.keyboard_listener = ZMQKeyboardSubscriber()
+            except Exception as e:
+                print(f"Warning: ElasticBand keyboard subscriber disabled: {e}")
+
         self.sim_thread = None
 
     def start_as_thread(self):
@@ -595,6 +712,13 @@ class BaseSimulator:
                 device_id=self.config["JOYSTICK_DEVICE"], js_type=self.config["JOYSTICK_TYPE"]
             )
 
+    def poll_keyboard_commands(self):
+        if self.keyboard_listener is None:
+            return
+        key = self.keyboard_listener.read_msg()
+        if key == "k":
+            self.sim_env.release_elastic_band()
+
     def start(self):
         """Main simulation loop"""
         sim_cnt = 0
@@ -607,6 +731,7 @@ class BaseSimulator:
             ):
                 step_start = time.monotonic()
 
+                self.poll_keyboard_commands()
                 self.sim_env.sim_step()
                 now = time.time()
                 if now - ts > 1 / 10.0 and self.redis_client is not None:
@@ -645,6 +770,9 @@ class BaseSimulator:
     def close(self):
         self._running = False
         try:
+            if self.keyboard_listener is not None:
+                self.keyboard_listener.close()
+                self.keyboard_listener = None
             if self.sim_env.image_publish_process is not None:
                 self.sim_env.image_publish_process.stop()
             if self.sim_env.viewer is not None:

@@ -100,6 +100,27 @@ class ComposedCameraConfig:
     mjpeg_quality: int = 80
     """MJPEG quality 1-100 (only when use_mjpeg=True)."""
 
+    zed_resolution: str = "HD720"
+    """ZED SDK capture resolution."""
+
+    zed_camera_fps: int = 60
+    """ZED SDK capture FPS."""
+
+    zed_depth_mode: str = "NONE"
+    """ZED SDK depth mode."""
+
+    zed_view: str = "LEFT"
+    """ZED SDK image view to publish."""
+
+    zed_output_width: int = 640
+    """ZED output image width after optional resize."""
+
+    zed_output_height: int = 480
+    """ZED output image height after optional resize."""
+
+    zed_resize_mode: str = "crop"
+    """ZED resize mode: none, resize, crop, or letterbox."""
+
     def __post_init__(self):
         self.run_as_server = self.server
 
@@ -392,6 +413,26 @@ class ComposedCameraSensor(Sensor, SensorServer):
             print(f"Initializing USB camera for type: {camera_type}, device: {device_idx}")
             return USBCameraSensor(
                 config=usb_config, mount_position=mount_position, device_index=device_idx
+            )
+
+        elif camera_type == "zed":
+            from gear_sonic.camera.drivers.zed import ZEDCameraConfig, ZEDCameraSensor
+
+            zed_config = ZEDCameraConfig(
+                resolution=self.config.zed_resolution,
+                camera_fps=self.config.zed_camera_fps,
+                depth_mode=self.config.zed_depth_mode,
+                view=self.config.zed_view,
+                output_width=self.config.zed_output_width,
+                output_height=self.config.zed_output_height,
+                resize_mode=self.config.zed_resize_mode,
+            )
+            print(
+                "Initializing ZED camera for type: "
+                f"{camera_type}, device: {device_id or 'default'}"
+            )
+            return ZEDCameraSensor(
+                config=zed_config, mount_position=mount_position, device_id=device_id
             )
 
         else:

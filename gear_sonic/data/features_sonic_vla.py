@@ -369,6 +369,26 @@ def get_features_sonic_vla(robot_model: RobotModel) -> dict:
     }
 
 
+def get_global_view_camera_features() -> dict:
+    """Features for the fixed overview (god's-eye) camera."""
+    return {
+        "observation.images.global_view": {
+            "dtype": "video",
+            "shape": [EGO_VIEW_HEIGHT, EGO_VIEW_WIDTH, 3],
+            "names": ["height", "width", "channel"],
+        },
+    }
+
+
+def get_global_view_camera_modality_config() -> dict:
+    """Modality config for the overview camera."""
+    return {
+        "video": {
+            "global_view": {"original_key": "observation.images.global_view"},
+        },
+    }
+
+
 def get_wrist_camera_features() -> dict:
     """Features for optional wrist cameras (added when ``record_wrist_cameras`` is enabled)."""
     return {
@@ -401,10 +421,11 @@ def get_g1_robot_model(
     ] = "lower_and_upper_body",
     high_elbow_pose: bool = False,
 ):
-    """Instantiate the G1 + ThreeFinger RobotModel for Sonic VLA."""
+    """Instantiate the G1 RobotModel (Inspire DFQ hands by default) for Sonic VLA."""
     from gear_sonic.data.robot_model.instantiation.g1 import instantiate_g1_robot_model
 
     return instantiate_g1_robot_model(
         waist_location=waist_location,
         high_elbow_pose=high_elbow_pose,
+        hand_type="inspire_dfq",
     )

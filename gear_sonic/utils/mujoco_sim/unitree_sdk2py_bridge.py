@@ -7,18 +7,21 @@ so the WBC policy sees the sim as a real robot.
 
 import sys
 import threading
+from types import SimpleNamespace
 from typing import Dict, Tuple
 
 import numpy as np
 import scipy.spatial.transform
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
 from unitree_sdk2py.idl.default import (
+    unitree_go_msg_dds__MotorCmd_,
+    unitree_go_msg_dds__MotorState_,
     unitree_go_msg_dds__WirelessController_,
-    unitree_hg_msg_dds__HandCmd_ as HandCmd_default,
-    unitree_hg_msg_dds__HandState_ as HandState_default,
 )
-from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
-from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_, OdoState_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import MotorCmds_, MotorStates_, WirelessController_
+from unitree_sdk2py.idl.unitree_hg.msg.dds_ import OdoState_
+
+INSPIRE_TO_POLICY_ORDER = (5, 4, 3, 2, 1, 0)
 
 
 class UnitreeSdk2Bridge:
@@ -59,6 +62,11 @@ class UnitreeSdk2Bridge:
         self.num_hand_motor = config.get("NUM_HAND_MOTORS", 0)
         self.use_sensor = config["USE_SENSOR"]
 
+        # Locks must exist before DDS subscribers start background reader threads.
+        self.low_cmd_lock = threading.Lock()
+        self.left_hand_cmd_lock = threading.Lock()
+        self.right_hand_cmd_lock = threading.Lock()
+
         self.have_imu_ = False
         self.have_frame_sensor_ = False
 
@@ -79,26 +87,23 @@ class UnitreeSdk2Bridge:
         self.torso_imu_puber = ChannelPublisher("rt/secondary_imu", IMUState_)
         self.torso_imu_puber.Init()
 
-        self.left_hand_state = HandState_default()
-        self.left_hand_state_puber = ChannelPublisher("rt/dex3/left/state", HandState_)
-        self.left_hand_state_puber.Init()
-        self.right_hand_state = HandState_default()
-        self.right_hand_state_puber = ChannelPublisher("rt/dex3/right/state", HandState_)
-        self.right_hand_state_puber.Init()
+        self.inspire_hand_state = MotorStates_(
+            states=[unitree_go_msg_dds__MotorState_() for _ in range(self.num_hand_motor * 2)]
+        )
+        self.inspire_hand_state_puber = ChannelPublisher("rt/inspire/state", MotorStates_)
+        self.inspire_hand_state_puber.Init()
 
         self.low_cmd_suber = ChannelSubscriber("rt/lowcmd", LowCmd_)
         self.low_cmd_suber.Init(self.LowCmdHandler, 1)
 
-        self.left_hand_cmd = HandCmd_default()
-        self.left_hand_cmd_suber = ChannelSubscriber("rt/dex3/left/cmd", HandCmd_)
-        self.left_hand_cmd_suber.Init(self.LeftHandCmdHandler, 1)
-        self.right_hand_cmd = HandCmd_default()
-        self.right_hand_cmd_suber = ChannelSubscriber("rt/dex3/right/cmd", HandCmd_)
-        self.right_hand_cmd_suber.Init(self.RightHandCmdHandler, 1)
-
-        self.low_cmd_lock = threading.Lock()
-        self.left_hand_cmd_lock = threading.Lock()
-        self.right_hand_cmd_lock = threading.Lock()
+        self.left_hand_cmd = SimpleNamespace(
+            motor_cmd=[unitree_go_msg_dds__MotorCmd_() for _ in range(self.num_hand_motor)]
+        )
+        self.right_hand_cmd = SimpleNamespace(
+            motor_cmd=[unitree_go_msg_dds__MotorCmd_() for _ in range(self.num_hand_motor)]
+        )
+        self.inspire_hand_cmd_suber = ChannelSubscriber("rt/inspire/cmd", MotorCmds_)
+        self.inspire_hand_cmd_suber.Init(self.InspireHandCmdHandler, 1)
 
         self.wireless_controller = unitree_go_msg_dds__WirelessController_()
         self.wireless_controller_puber = ChannelPublisher(
@@ -146,16 +151,30 @@ class UnitreeSdk2Bridge:
             self.low_cmd_received = True
             self.new_low_cmd = True
 
-    def LeftHandCmdHandler(self, msg):
-        with self.left_hand_cmd_lock:
-            self.left_hand_cmd = msg
-            self.left_hand_cmd_received = True
-            self.new_left_hand_cmd = True
+    @staticmethod
+    def _copy_motor_cmd(src, dst):
+        dst.mode = src.mode
+        dst.q = src.q
+        dst.dq = src.dq
+        dst.tau = src.tau
+        dst.kp = src.kp
+        dst.kd = src.kd
 
-    def RightHandCmdHandler(self, msg):
-        with self.right_hand_cmd_lock:
-            self.right_hand_cmd = msg
+    def _copy_inspire_side_to_policy_order(self, cmds, offset: int, out_cmd):
+        for policy_i, inspire_i in enumerate(INSPIRE_TO_POLICY_ORDER[: self.num_hand_motor]):
+            self._copy_motor_cmd(cmds[offset + inspire_i], out_cmd.motor_cmd[policy_i])
+
+    def InspireHandCmdHandler(self, msg):
+        if len(msg.cmds) < self.num_hand_motor * 2:
+            return
+        with self.left_hand_cmd_lock, self.right_hand_cmd_lock:
+            self._copy_inspire_side_to_policy_order(
+                msg.cmds, self.num_hand_motor, self.left_hand_cmd
+            )
+            self._copy_inspire_side_to_policy_order(msg.cmds, 0, self.right_hand_cmd)
+            self.left_hand_cmd_received = True
             self.right_hand_cmd_received = True
+            self.new_left_hand_cmd = True
             self.new_right_hand_cmd = True
 
     def cmd_received(self):
@@ -207,16 +226,15 @@ class UnitreeSdk2Bridge:
 
         self.torso_imu_puber.Write(self.torso_imu_state)
 
-        # publish hand state
-        for i in range(self.num_hand_motor):
-            self.left_hand_state.motor_state[i].q = obs["left_hand_q"][i]
-            self.left_hand_state.motor_state[i].dq = obs["left_hand_dq"][i]
-        self.left_hand_state_puber.Write(self.left_hand_state)
-
-        for i in range(self.num_hand_motor):
-            self.right_hand_state.motor_state[i].q = obs["right_hand_q"][i]
-            self.right_hand_state.motor_state[i].dq = obs["right_hand_dq"][i]
-        self.right_hand_state_puber.Write(self.right_hand_state)
+        # publish Inspire hand state: right side first, then left; values remain radians in sim.
+        for inspire_i, policy_i in enumerate(INSPIRE_TO_POLICY_ORDER[: self.num_hand_motor]):
+            right_state = self.inspire_hand_state.states[inspire_i]
+            right_state.q = obs["right_hand_q"][policy_i]
+            right_state.dq = obs["right_hand_dq"][policy_i]
+            left_state = self.inspire_hand_state.states[self.num_hand_motor + inspire_i]
+            left_state.q = obs["left_hand_q"][policy_i]
+            left_state.dq = obs["left_hand_dq"][policy_i]
+        self.inspire_hand_state_puber.Write(self.inspire_hand_state)
 
     def GetAction(self) -> Tuple[np.ndarray, bool, bool]:
         with self.low_cmd_lock:
@@ -225,7 +243,7 @@ class UnitreeSdk2Bridge:
             left_hand_q = [self.left_hand_cmd.motor_cmd[i].q for i in range(self.num_hand_motor)]
         with self.right_hand_cmd_lock:
             right_hand_q = [self.right_hand_cmd.motor_cmd[i].q for i in range(self.num_hand_motor)]
-        with self.low_cmd_lock and self.left_hand_cmd_lock and self.right_hand_cmd_lock:
+        with self.low_cmd_lock, self.left_hand_cmd_lock, self.right_hand_cmd_lock:
             is_new_action = self.new_low_cmd and self.new_left_hand_cmd and self.new_right_hand_cmd
             if is_new_action:
                 self.new_low_cmd = False
@@ -373,7 +391,7 @@ class ElasticBand:
         self.kd_pos = 1000
         self.kp_ang = 1000
         self.kd_ang = 10
-        self.point = np.array([0, 0, 1])
+        self.point = np.array([-0.0, -0.0, 0.85])
         self.length = 0
         self.enable = True
 
@@ -403,6 +421,11 @@ class ElasticBand:
             self.length += 0.1
         if key == glfw.KEY_9:
             self.enable = not self.enable
+
+    def release(self):
+        if self.enable:
+            self.enable = False
+            print("ElasticBand released")
 
     def handle_keyboard_button(self, key):
         if key == "9":
