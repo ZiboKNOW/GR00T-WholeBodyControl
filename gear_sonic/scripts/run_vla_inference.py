@@ -4,7 +4,7 @@ VLA inference runner — NO ROS 2 DEPENDENCY.
 Runs an Isaac-GR00T VLA policy against the Sonic whole-body control stack.
 All communication uses ZMQ:
   1. Robot state  -> ZMQ SUB on ``g1_debug`` topic (from C++ zmq_output_handler)
-  2. Actions out  -> ZMQ PUB (latent protocol v4: motion token + hand joints)
+  2. Actions out  -> ZMQ PUB (latent protocol v4: motion token + optional hand joints)
   3. Camera       -> ZMQ/TCP via ComposedCameraClientSensor
   4. Keyboard     -> ZMQ SUB via ZMQKeyboardSubscriber
 
@@ -16,8 +16,8 @@ Keyboard commands (received via ZMQ from the standalone keyboard publisher):
   k  -> start / stop the C++ control loop
   i  -> send initial pose and switch to POSE mode
   t  -> change prompt at runtime (publisher sends ``prompt:<text>``)
-  [  -> toggle left hand open/closed for initial pose
-  ]  -> toggle right hand open/closed for initial pose
+  [  -> toggle left hand open/closed for initial pose (hand-enabled policies only)
+  ]  -> toggle right hand open/closed for initial pose (hand-enabled policies only)
   c  -> start recording (handled by data exporter if running)
   s  -> stop recording success (handled by data exporter)
   f  -> stop recording failure (handled by data exporter)
@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import queue
 import threading
 import time
+from typing import Any
 
 import numpy as np
 import tyro
@@ -56,6 +57,44 @@ INSPIRE_HAND_DOF = 6
 INSPIRE_OPEN_HAND = np.array([-0.1, -0.1, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
 INSPIRE_CLOSED_HAND = np.array([1.3, 0.6, 1.7, 1.7, 1.7, 1.7], dtype=np.float32)
 
+DEFAULT_EMBODIMENT_TAG = "unitree_g1_sonic_no_hand_wo_wrist"
+
+SONIC_BODY_STATE_SLICES = {
+    "left_leg": slice(0, 6),
+    "right_leg": slice(6, 12),
+    "waist": slice(12, 15),
+    "left_arm": slice(15, 22),
+    "right_arm": slice(22, 29),
+}
+
+SONIC_HAND_STATE_KEYS = {"left_hand", "right_hand"}
+SONIC_HAND_ACTION_KEYS = {"left_hand_joints", "right_hand_joints"}
+
+SONIC_STATE_KEYS_WITH_HANDS = [
+    "left_leg",
+    "right_leg",
+    "waist",
+    "left_arm",
+    "right_arm",
+    "left_hand",
+    "right_hand",
+    "projected_gravity",
+]
+SONIC_STATE_KEYS_NO_HANDS = [
+    "left_leg",
+    "right_leg",
+    "waist",
+    "left_arm",
+    "right_arm",
+    "projected_gravity",
+]
+SONIC_ACTION_KEYS_WITH_HANDS = [
+    "motion_token",
+    "left_hand_joints",
+    "right_hand_joints",
+]
+SONIC_ACTION_KEYS_NO_HANDS = ["motion_token"]
+
 
 def _validate_hand_action(name: str, value: np.ndarray) -> np.ndarray:
     value = np.asarray(value, dtype=np.float32)
@@ -64,6 +103,69 @@ def _validate_hand_action(name: str, value: np.ndarray) -> np.ndarray:
             f"{name} must have last dimension {INSPIRE_HAND_DOF}, got {value.shape}"
         )
     return value
+
+
+def _normalize_embodiment_tag(tag: str) -> str:
+    return tag.strip().lower()
+
+
+def _keys_from_modality(modality_config: Any, modality: str) -> list[str]:
+    config = modality_config.get(modality)
+    if config is None:
+        return []
+    if hasattr(config, "modality_keys"):
+        return list(config.modality_keys)
+    if isinstance(config, dict):
+        return list(config.get("modality_keys", []))
+    raise TypeError(f"Unsupported {modality} modality config type: {type(config)}")
+
+
+def _fallback_modality_keys(embodiment_tag: str) -> dict[str, list[str]]:
+    tag = _normalize_embodiment_tag(embodiment_tag)
+    has_hands = "no_hand" not in tag
+    has_wrist_cameras = tag in {
+        "unitree_g1_sonic_no_hand",
+        "g1_sonic_inspire_wrist",
+    }
+
+    video_keys = ["ego_view"]
+    if has_wrist_cameras:
+        video_keys.extend(["left_wrist", "right_wrist"])
+
+    return {
+        "video": video_keys,
+        "state": SONIC_STATE_KEYS_WITH_HANDS if has_hands else SONIC_STATE_KEYS_NO_HANDS,
+        "action": SONIC_ACTION_KEYS_WITH_HANDS if has_hands else SONIC_ACTION_KEYS_NO_HANDS,
+    }
+
+
+def _resolve_modality_keys(policy, embodiment_tag: str) -> dict[str, list[str]]:
+    try:
+        modality_config = policy.get_modality_config()
+        keys = {
+            "video": _keys_from_modality(modality_config, "video"),
+            "state": _keys_from_modality(modality_config, "state"),
+            "action": _keys_from_modality(modality_config, "action"),
+        }
+        if all(keys.values()):
+            return keys
+        print(
+            "[Warning] PolicyServer returned incomplete modality config; "
+            "falling back to embodiment-tag defaults."
+        )
+    except Exception as e:
+        print(
+            f"[Warning] Could not query PolicyServer modality config ({e}); "
+            "falling back to embodiment-tag defaults."
+        )
+    return _fallback_modality_keys(embodiment_tag)
+
+
+def _get_optional_action_field(action_dict: dict, key: str):
+    value = action_dict.get(key)
+    if value is not None:
+        return value
+    return action_dict.get(f"action.{key}")
 
 
 @dataclass
@@ -116,7 +218,7 @@ class InferenceConfig:
     """ZMQ port for keyboard input."""
 
     # Embodiment
-    embodiment_tag: str = "unitree_g1_sonic_inspire"
+    embodiment_tag: str = DEFAULT_EMBODIMENT_TAG
     """Embodiment tag for policy inference."""
 
     # Prompt / eval
@@ -209,6 +311,8 @@ def prepare_observation_from_sensors(
     state_subscriber,
     robot_model,
     language_prompt: str,
+    video_keys: list[str],
+    state_keys: list[str],
     log_errors: bool = False,
 ):
     """Read sensors and prepare observation for the VLA policy.
@@ -228,27 +332,23 @@ def prepare_observation_from_sensors(
             print("[DEBUG] prepare_observation: waiting for state msg..", flush=True)
         return None
 
-    cam_img = camera_msg["images"]["ego_view"]
-
     body_q = np.asarray(state_msg["body_q"], dtype=np.float32)
-    left_hand_q = np.asarray(state_msg["left_hand_q"], dtype=np.float32)
-    right_hand_q = np.asarray(state_msg["right_hand_q"], dtype=np.float32)
     if body_q.shape[-1] != 29:
         raise ValueError(f"body_q must have shape [29], got {body_q.shape}")
-    if left_hand_q.shape[-1] != INSPIRE_HAND_DOF:
-        raise ValueError(
-            f"left_hand_q must have shape [{INSPIRE_HAND_DOF}], got {left_hand_q.shape}"
-        )
-    if right_hand_q.shape[-1] != INSPIRE_HAND_DOF:
-        raise ValueError(
-            f"right_hand_q must have shape [{INSPIRE_HAND_DOF}], got {right_hand_q.shape}"
-        )
 
-    video = {"ego_view": cam_img[np.newaxis, np.newaxis]}
-    if "left_wrist" in camera_msg["images"]:
-        video["left_wrist"] = camera_msg["images"]["left_wrist"][np.newaxis, np.newaxis]
-    if "right_wrist" in camera_msg["images"]:
-        video["wrist_view"] = camera_msg["images"]["right_wrist"][np.newaxis, np.newaxis]
+    images = camera_msg["images"]
+    video = {}
+    missing_video_keys = [key for key in video_keys if key not in images]
+    if missing_video_keys:
+        if log_errors:
+            print(
+                "[DEBUG] prepare_observation: waiting for required camera keys "
+                f"{missing_video_keys}; available: {list(images.keys())}",
+                flush=True,
+            )
+        return None
+    for key in video_keys:
+        video[key] = images[key][np.newaxis, np.newaxis]
 
     observation = {
         "video": video,
@@ -258,13 +358,31 @@ def prepare_observation_from_sensors(
         },
         "timestamps": camera_msg["timestamps"]["ego_view"],
     }
-    observation["state"]["left_leg"] = body_q[0:6][np.newaxis, np.newaxis]
-    observation["state"]["right_leg"] = body_q[6:12][np.newaxis, np.newaxis]
-    observation["state"]["waist"] = body_q[12:15][np.newaxis, np.newaxis]
-    observation["state"]["left_arm"] = body_q[15:22][np.newaxis, np.newaxis]
-    observation["state"]["left_hand"] = left_hand_q[np.newaxis, np.newaxis]
-    observation["state"]["right_arm"] = body_q[22:29][np.newaxis, np.newaxis]
-    observation["state"]["right_hand"] = right_hand_q[np.newaxis, np.newaxis]
+    for key in state_keys:
+        if key in SONIC_BODY_STATE_SLICES:
+            observation["state"][key] = body_q[SONIC_BODY_STATE_SLICES[key]][
+                np.newaxis, np.newaxis
+            ]
+
+    if "left_hand" in state_keys:
+        if "left_hand_q" not in state_msg:
+            raise KeyError("Policy requires state.left_hand but state_msg lacks left_hand_q")
+        left_hand_q = np.asarray(state_msg["left_hand_q"], dtype=np.float32)
+        if left_hand_q.shape[-1] != INSPIRE_HAND_DOF:
+            raise ValueError(
+                f"left_hand_q must have shape [{INSPIRE_HAND_DOF}], got {left_hand_q.shape}"
+            )
+        observation["state"]["left_hand"] = left_hand_q[np.newaxis, np.newaxis]
+
+    if "right_hand" in state_keys:
+        if "right_hand_q" not in state_msg:
+            raise KeyError("Policy requires state.right_hand but state_msg lacks right_hand_q")
+        right_hand_q = np.asarray(state_msg["right_hand_q"], dtype=np.float32)
+        if right_hand_q.shape[-1] != INSPIRE_HAND_DOF:
+            raise ValueError(
+                f"right_hand_q must have shape [{INSPIRE_HAND_DOF}], got {right_hand_q.shape}"
+            )
+        observation["state"]["right_hand"] = right_hand_q[np.newaxis, np.newaxis]
 
     # Projected gravity for Sonic latent embodiment
     assert "base_quat" in state_msg, "base_quat not found in state_msg"
@@ -275,10 +393,20 @@ def prepare_observation_from_sensors(
         projected_gravity, dtype=np.float32
     )[np.newaxis, np.newaxis]
 
+    missing_state_keys = [key for key in state_keys if key not in observation["state"]]
+    if missing_state_keys:
+        supported_state_keys = (
+            set(SONIC_BODY_STATE_SLICES) | SONIC_HAND_STATE_KEYS | {"projected_gravity"}
+        )
+        raise KeyError(
+            f"Cannot build required policy state keys {missing_state_keys}. "
+            f"Supported Sonic state keys: {sorted(supported_state_keys)}"
+        )
+
     return observation
 
 
-def run_policy_inference_and_process(policy, observation, robot_model):
+def run_policy_inference_and_process(policy, observation, robot_model, action_keys: list[str]):
     """Run policy inference via Isaac-GR00T PolicyClient and process results.
 
     Returns:
@@ -290,14 +418,25 @@ def run_policy_inference_and_process(policy, observation, robot_model):
         action.pop("task_progress", None)
         action.pop("action.task_progress", None)
 
-        motion_key = "motion_token" if "motion_token" in action else "action.motion_token"
-        if np.abs(action[motion_key]).max() > 1.25:
+        motion_token = _get_optional_action_field(action, "motion_token")
+        if motion_token is None:
+            raise KeyError(
+                f"Policy action did not include motion_token. Available keys: {list(action.keys())}"
+            )
+        if np.abs(np.asarray(motion_token)).max() > 1.25:
             print(
-                f"[Warning] action['{motion_key}'] max "
-                f"({np.abs(action[motion_key]).max():.4f}) > 1.25. "
+                f"[Warning] action['motion_token'] max "
+                f"({np.abs(np.asarray(motion_token)).max():.4f}) > 1.25. "
                 "Exceeds action bound, skipping."
             )
             return None
+
+        for key in action_keys:
+            if _get_optional_action_field(action, key) is None:
+                raise KeyError(
+                    f"Policy action missing required field '{key}'. "
+                    f"Available keys: {list(action.keys())}"
+                )
 
         processed_action = concat_action(robot_model, action)
         return processed_action
@@ -390,7 +529,15 @@ def main(config: InferenceConfig):
     print_green(
         f"ZMQ action socket bound to tcp://{config.action_zmq_host}:{config.action_zmq_port}"
     )
+    modality_keys = _resolve_modality_keys(n1_policy, config.embodiment_tag)
+    video_keys = modality_keys["video"]
+    state_keys = modality_keys["state"]
+    action_keys = modality_keys["action"]
+    hand_action_enabled = bool(SONIC_HAND_ACTION_KEYS & set(action_keys))
     print_green(f"Using embodiment tag: {config.embodiment_tag}")
+    print_green(f"Policy video keys: {video_keys}")
+    print_green(f"Policy state keys: {state_keys}")
+    print_green(f"Policy action keys: {action_keys}")
 
     keyboard_listener = ZMQKeyboardSubscriber(
         port=config.keyboard_zmq_port, host=config.keyboard_zmq_host
@@ -412,16 +559,20 @@ def main(config: InferenceConfig):
     def publish_initial_pose():
         """Publish initial pose command to move robot to starting position."""
         print("Moving to initial pose")
-        left_hand = (
-            INSPIRE_CLOSED_HAND.copy()
-            if initial_pose_left_hand_closed
-            else INSPIRE_OPEN_HAND.copy()
-        )
-        right_hand = (
-            INSPIRE_CLOSED_HAND.copy()
-            if initial_pose_right_hand_closed
-            else INSPIRE_OPEN_HAND.copy()
-        )
+        left_hand = None
+        right_hand = None
+        if "left_hand_joints" in action_keys:
+            left_hand = (
+                INSPIRE_CLOSED_HAND.copy()
+                if initial_pose_left_hand_closed
+                else INSPIRE_OPEN_HAND.copy()
+            )
+        if "right_hand_joints" in action_keys:
+            right_hand = (
+                INSPIRE_CLOSED_HAND.copy()
+                if initial_pose_right_hand_closed
+                else INSPIRE_OPEN_HAND.copy()
+            )
         zmq_message = pack_latent_action_message(
             motion_token=LATENT_INITIAL_MOTION_TOKEN,
             frame_index=np.array([0], dtype=np.int64),
@@ -526,11 +677,17 @@ def main(config: InferenceConfig):
                     if pause_loop:
                         print("Note: Policy loop is paused - press 'p' to resume")
         elif key == "[":
+            if not hand_action_enabled:
+                print("Initial pose hand toggles are disabled for this no-hand policy.")
+                return
             initial_pose_left_hand_closed = not initial_pose_left_hand_closed
             print(
                 f"Initial pose left hand: {'closed' if initial_pose_left_hand_closed else 'open'}"
             )
         elif key == "]":
+            if not hand_action_enabled:
+                print("Initial pose hand toggles are disabled for this no-hand policy.")
+                return
             initial_pose_right_hand_closed = not initial_pose_right_hand_closed
             print(
                 f"Initial pose right hand: "
@@ -558,12 +715,15 @@ def main(config: InferenceConfig):
                 state_subscriber=state_subscriber,
                 robot_model=robot_model,
                 language_prompt=language_prompt_ref[0],
+                video_keys=video_keys,
+                state_keys=state_keys,
                 log_errors=True,
             ),
             lambda obs: run_policy_inference_and_process(
                 policy=n1_policy,
                 observation=obs,
                 robot_model=robot_model,
+                action_keys=action_keys,
             ),
         ),
         daemon=True,
@@ -626,39 +786,32 @@ def main(config: InferenceConfig):
                         get_action_field(processed_action, "motion_token"),
                         dtype=np.float32,
                     )
-                    left_hand_joints = np.asarray(
-                        get_action_field(processed_action, "left_hand_joints"),
-                        dtype=np.float32,
-                    )
-                    right_hand_joints = np.asarray(
-                        get_action_field(processed_action, "right_hand_joints"),
-                        dtype=np.float32,
-                    )
-                    left_hand_joints = _validate_hand_action(
-                        "left_hand_joints", left_hand_joints
-                    )
-                    right_hand_joints = _validate_hand_action(
-                        "right_hand_joints", right_hand_joints
-                    )
+                    hand_actions = {}
+                    for hand_key in sorted(SONIC_HAND_ACTION_KEYS & set(action_keys)):
+                        hand_actions[hand_key] = _validate_hand_action(
+                            hand_key,
+                            np.asarray(
+                                get_action_field(processed_action, hand_key),
+                                dtype=np.float32,
+                            ),
+                        )
 
                     # Action arrays arrive as (B, T, D) from the model.
                     # Squeeze batch dim to get (T, D), then index by time step.
                     if motion_token.ndim == 3:
                         motion_token = motion_token[0]
-                    if left_hand_joints.ndim == 3:
-                        left_hand_joints = left_hand_joints[0]
-                    if right_hand_joints.ndim == 3:
-                        right_hand_joints = right_hand_joints[0]
+                    for hand_key, hand_value in list(hand_actions.items()):
+                        if hand_value.ndim == 3:
+                            hand_actions[hand_key] = hand_value[0]
 
                     horizon = motion_token.shape[0] if motion_token.ndim == 2 else 1
                     current_idx = min(action_chunk_index, horizon - 1)
 
                     if motion_token.ndim == 2:
                         motion_token = motion_token[current_idx]
-                    if left_hand_joints.ndim == 2:
-                        left_hand_joints = left_hand_joints[current_idx]
-                    if right_hand_joints.ndim == 2:
-                        right_hand_joints = right_hand_joints[current_idx]
+                    for hand_key, hand_value in list(hand_actions.items()):
+                        if hand_value.ndim == 2:
+                            hand_actions[hand_key] = hand_value[current_idx]
 
                     frame_index = np.array([zmq_frame_counter], dtype=np.int64)
                     zmq_frame_counter += 1
@@ -666,8 +819,8 @@ def main(config: InferenceConfig):
                     zmq_message = pack_latent_action_message(
                         motion_token,
                         frame_index,
-                        left_hand_joints=left_hand_joints,
-                        right_hand_joints=right_hand_joints,
+                        left_hand_joints=hand_actions.get("left_hand_joints"),
+                        right_hand_joints=hand_actions.get("right_hand_joints"),
                     )
                     zmq_socket.send(zmq_message)
                     if zmq_frame_counter % 50 == 0:

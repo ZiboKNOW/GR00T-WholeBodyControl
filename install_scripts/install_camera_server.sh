@@ -70,6 +70,7 @@ echo "    source .venv_camera/bin/activate"
 echo ""
 echo "  For other camera SDKs, install into the venv:"
 echo "    pip install pyrealsense2     # Intel RealSense"
+echo "    python /usr/local/zed/get_python_api.py  # Stereolabs ZED SDK Python API"
 echo ""
 echo "  See docs/source/tutorials/data_collection.md for full setup."
 echo "══════════════════════════════════════════════════════════════"
@@ -154,7 +155,7 @@ echo ""
 CAMERA_ARGS=""
 
 # --- Ego-view camera (required) ---
-read -rp "  Ego-view camera type (oak, oak_mono, realsense, usb) [oak]: " EGO_TYPE
+read -rp "  Ego-view camera type (oak, oak_mono, realsense, usb, zed) [oak]: " EGO_TYPE
 EGO_TYPE="${EGO_TYPE:-oak}"
 read -rp "  Ego-view device ID (MxID or /dev/video index): " EGO_DEVICE_ID
 CAMERA_ARGS="--ego-view-camera ${EGO_TYPE}"

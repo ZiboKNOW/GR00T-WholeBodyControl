@@ -120,7 +120,7 @@ class InferenceLaunchConfig:
     policy_port: int = 5550
     """Isaac-GR00T PolicyServer port."""
 
-    embodiment_tag: str = "unitree_g1_sonic_inspire"
+    embodiment_tag: str = "unitree_g1_sonic_no_hand_wo_wrist"
     """Embodiment tag for policy inference."""
 
     prompt: str = "demo"
@@ -335,7 +335,7 @@ def main(config: InferenceLaunchConfig):
         pub = ctx.socket(zmq.PUB)
         pub.bind('tcp://localhost:5580')
         time.sleep(0.5)
-        print('Keyboard publisher ready. Keys: p=pause, k=start/stop, i=init pose, [/]=toggle hands, t=prompt')
+        print('Keyboard publisher ready. Keys: p=pause, k=start/stop, i=init pose, [/]=toggle hands if enabled, t=prompt')
         while True:
             key = input()
             if key.startswith('t '):
@@ -419,8 +419,8 @@ def main(config: InferenceLaunchConfig):
     print("    p        - Pause / resume inference")
     print("    k        - Start / stop C++ control loop")
     print("    i        - Send initial pose")
-    print("    [        - Toggle left hand open/closed (initial pose)")
-    print("    ]        - Toggle right hand open/closed (initial pose)")
+    print("    [        - Toggle left hand open/closed (if hand actions enabled)")
+    print("    ]        - Toggle right hand open/closed (if hand actions enabled)")
     print("    t <text> - Change inference prompt")
     if config.data_exporter:
         print("    c        - Start recording episode")
