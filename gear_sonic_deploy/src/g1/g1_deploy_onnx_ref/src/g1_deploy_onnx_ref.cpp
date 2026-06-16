@@ -132,6 +132,7 @@
 
 // Inspire hands
 #include "../include/inspire_hands.hpp"
+#include "../include/sim_hands.hpp"
 
 // Error monitor
 #include "../include/error_monitor.hpp"
@@ -278,8 +279,11 @@ class G1Deploy {
     // =========================================================================
     std::unique_ptr<unitree::robot::b2::MotionSwitcherClient> msc_;
     
-    // Inspire hands manager
+    // Hand managers: real robot uses Inspire normalized DDS; MuJoCo sim uses radians.
     InspireHands inspire_hands_;
+    SimHands sim_hands_;
+    bool use_sim_hands_ = false;
+    bool sim_hand_command_active_ = false;
 
     // Motor error monitor (tracks fault state transitions)
     ErrorMonitor error_monitor_;
@@ -2167,6 +2171,7 @@ class G1Deploy {
         mode_pr_(Mode::PR),
         mode_machine_(0),
         disable_crc_check_(disable_crc_check),
+        use_sim_hands_(disable_crc_check),
         program_state_(ProgramState::INIT),
         last_action {0.0},
         last_left_hand_action {0.0},
@@ -2181,8 +2186,11 @@ class G1Deploy {
       // Initialize ChannelFactory
       ChannelFactory::Instance()->Init(0, networkInterface);
 
-      // Initialize Inspire hand DDS channels (ChannelFactory already initialized above)
-      inspire_hands_.initialize("inspire");
+      if (use_sim_hands_) {
+        sim_hands_.initialize();
+      } else {
+        inspire_hands_.initialize("inspire");
+      }
 
       audio_thread_ = std::make_unique<AudioThread>();
 
@@ -2674,8 +2682,13 @@ class G1Deploy {
         lowcmd_publisher_->Write(dds_low_command);
       }
 
-      // Publish Inspire hand commands at the same publish cadence.
-      inspire_hands_.writeOnce();
+      if (use_sim_hands_) {
+        if (program_state_ == ProgramState::CONTROL && sim_hand_command_active_) {
+          sim_hands_.writeOnce();
+        }
+      } else {
+        inspire_hands_.writeOnce();
+      }
     }
 
     /// Gracefully stop all threads and send a damping-only command.
@@ -2744,12 +2757,22 @@ class G1Deploy {
           motor_command_tmp.q_target.at(i) =
               static_cast<float>(current_pos * (1.0 - ratio) + default_angles[i] * ratio);
         }
-        inspire_hands_.close(true);
-        inspire_hands_.close(false);
+        if (use_sim_hands_) {
+          sim_hands_.close(true);
+          sim_hands_.close(false);
+        } else {
+          inspire_hands_.close(true);
+          inspire_hands_.close(false);
+        }
       } else {
         program_state_ = ProgramState::WAIT_FOR_CONTROL;
-        inspire_hands_.open(true);
-        inspire_hands_.open(false);
+        if (use_sim_hands_) {
+          sim_hands_.open(true);
+          sim_hands_.open(false);
+        } else {
+          inspire_hands_.open(true);
+          inspire_hands_.open(false);
+        }
         std::cout << "Init Done" << std::endl;
       }
       motor_command_buffer_.SetData(motor_command_tmp);
@@ -2896,11 +2919,15 @@ class G1Deploy {
       std::array<double, 3> body_torso_ang_vel = float_to_double<3>(imu_torso->gyroscope());
       std::array<double, 3> body_torso_accel = float_to_double<3>(imu_torso->accelerometer());
 
-      // Collect Inspire hand states as URDF-radian qpos in policy order.
-      hand::HandJointArray left_hand_q = inspire_hands_.getPosition(true);
-      hand::HandJointArray left_hand_dq = inspire_hands_.getVelocity(true);
-      hand::HandJointArray right_hand_q = inspire_hands_.getPosition(false);
-      hand::HandJointArray right_hand_dq = inspire_hands_.getVelocity(false);
+      // Internal hand states stay in URDF radians in policy order.
+      hand::HandJointArray left_hand_q =
+          use_sim_hands_ ? sim_hands_.getPosition(true) : inspire_hands_.getPosition(true);
+      hand::HandJointArray left_hand_dq =
+          use_sim_hands_ ? sim_hands_.getVelocity(true) : inspire_hands_.getVelocity(true);
+      hand::HandJointArray right_hand_q =
+          use_sim_hands_ ? sim_hands_.getPosition(false) : inspire_hands_.getPosition(false);
+      hand::HandJointArray right_hand_dq =
+          use_sim_hands_ ? sim_hands_.getVelocity(false) : inspire_hands_.getVelocity(false);
 
       // Log robot state for analysis and debugging
       if (state_logger_) {
@@ -3930,10 +3957,17 @@ class G1Deploy {
           }
           auto motor_command_end_time = std::chrono::steady_clock::now();
 
-          // Set Inspire hand poses. Buffers are URDF radians in policy order; InspireHands
-          // maps them to normalized DDS [0,1] commands at the hardware boundary.
-          inspire_hands_.setAllJointsCommand(true, left_hand_joint_buffer_);
-          inspire_hands_.setAllJointsCommand(false, right_hand_joint_buffer_);
+          if (use_sim_hands_) {
+            sim_hand_command_active_ = has_left_hand_data_ || has_right_hand_data_;
+            if (sim_hand_command_active_) {
+              sim_hands_.setAllJointsCommand(true, left_hand_joint_buffer_);
+              sim_hands_.setAllJointsCommand(false, right_hand_joint_buffer_);
+            }
+          } else {
+            // Real Inspire hardware receives normalized [0,1] only at this boundary.
+            inspire_hands_.setAllJointsCommand(true, left_hand_joint_buffer_);
+            inspire_hands_.setAllJointsCommand(false, right_hand_joint_buffer_);
+          }
           
           // Update last hand actions for logging (use buffered data)
           for (std::size_t i = 0; i < hand::HAND_DOF; ++i) {
@@ -4092,6 +4126,8 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --planner-motion-logfile <path>: write planner motion to a csv file if provided" << std::endl;
     std::cout << "  --policy-input-logfile <path>: write policy input tensors to a csv file if provided" << std::endl;
     std::cout << "  --disable-crc-check: disable CRC validation for MuJoCo simulation" << std::endl;
+    std::cout << "                       Defaults to enabled when network_interface is 'lo'" << std::endl;
+    std::cout << "  --enable-crc-check: force CRC validation on (for real robot / non-sim runs)" << std::endl;
     std::cout << "  --obs-config <path>: specify observation configuration YAML file" << std::endl;
     std::cout << "  --encoder-file <path>: specify encoder ONNX file (optional)" << std::endl;
     std::cout << "  --planner-precision <16|32>: specify precision to run the planner model at (default: 16)" << std::endl;
@@ -4130,8 +4166,12 @@ int main(int argc, char const* argv[]) {
   std::string motionDataPath = argv[3];
   std::string plannerFile = "";
 
-  // Parse optional arguments
-  bool disableCrcCheck = false;\
+  // Parse optional arguments. Loopback is the sim2sim default, so use the MuJoCo
+  // hand/CRC path unless explicitly overridden below.
+  bool disableCrcCheck = (networkInterface == "lo");
+  if (disableCrcCheck) {
+    std::cout << "[INFO] CRC checking disabled by default for loopback MuJoCo simulation" << std::endl;
+  }
   std::string obsConfigPath = "";
   std::string encoderFile = "";
   std::string targetMotionLogfile = "";
@@ -4159,6 +4199,9 @@ int main(int argc, char const* argv[]) {
     if (std::string(argv[i]) == "--disable-crc-check") {
       disableCrcCheck = true;
       std::cout << "[INFO] CRC checking disabled for MuJoCo simulation" << std::endl;
+    } else if (std::string(argv[i]) == "--enable-crc-check") {
+      disableCrcCheck = false;
+      std::cout << "[INFO] CRC checking enabled by command line" << std::endl;
     } else if (std::string(argv[i]) == "--obs-config") {
       if (i + 1 < argc) {
         obsConfigPath = argv[i + 1];

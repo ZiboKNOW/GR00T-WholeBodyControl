@@ -56,6 +56,18 @@ from gear_sonic.utils.teleop.zmq.zmq_planner_sender import (
 INSPIRE_HAND_DOF = 6
 INSPIRE_OPEN_HAND = np.array([-0.1, -0.1, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
 INSPIRE_CLOSED_HAND = np.array([1.3, 0.6, 1.7, 1.7, 1.7, 1.7], dtype=np.float32)
+NO_HAND_EMBODIMENT_TAG = "unitree_g1_sonic_no_hand"
+MOTION_TOKEN_QUANTIZE_STEP = 0.0625
+
+
+def quantize_motion_token(motion_token: np.ndarray) -> np.ndarray:
+    """Snap motion tokens to the SONIC FSQ grid used during HDMI training."""
+    token = np.asarray(motion_token, dtype=np.float32)
+    return np.round(token / MOTION_TOKEN_QUANTIZE_STEP) * MOTION_TOKEN_QUANTIZE_STEP
+
+
+def is_no_hand_embodiment(embodiment_tag: str) -> bool:
+    return embodiment_tag.lower() == NO_HAND_EMBODIMENT_TAG
 
 DEFAULT_EMBODIMENT_TAG = "unitree_g1_sonic_no_hand_wo_wrist"
 
@@ -257,6 +269,7 @@ def pack_latent_action_message(
         Packed ZMQ message bytes.
     """
     motion_token = np.asarray(motion_token, dtype=np.float32)
+    motion_token = quantize_motion_token(motion_token)
     frame_index = np.asarray(frame_index, dtype=np.int64)
 
     if frame_index.ndim == 0:
@@ -335,7 +348,6 @@ def prepare_observation_from_sensors(
     body_q = np.asarray(state_msg["body_q"], dtype=np.float32)
     if body_q.shape[-1] != 29:
         raise ValueError(f"body_q must have shape [29], got {body_q.shape}")
-
     images = camera_msg["images"]
     video = {}
     missing_video_keys = [key for key in video_keys if key not in images]
@@ -499,6 +511,7 @@ def _inference_worker_loop(
 
 def main(config: InferenceConfig):
     pause_loop = True
+    no_hand = is_no_hand_embodiment(config.embodiment_tag)
 
     robot_model = instantiate_g1_robot_model(waist_location="lower_and_upper_body")
 
@@ -538,6 +551,11 @@ def main(config: InferenceConfig):
     print_green(f"Policy video keys: {video_keys}")
     print_green(f"Policy state keys: {state_keys}")
     print_green(f"Policy action keys: {action_keys}")
+    if no_hand:
+        print_green(
+            "No-hand mode: VLA publishes motion_token only; "
+            "sim hands stay at C++ deploy default pose."
+        )
 
     keyboard_listener = ZMQKeyboardSubscriber(
         port=config.keyboard_zmq_port, host=config.keyboard_zmq_host
@@ -663,6 +681,13 @@ def main(config: InferenceConfig):
                 print("Policy loop paused (C++ loop still running - press 'k' to stop)")
             else:
                 print("Policy loop resumed")
+                last_inference_time = 0.0
+                action_chunk_index = 0
+                cached_action_chunk = None
+                print(
+                    "Cleared cached action chunk — wait for a fresh inference "
+                    "(press c before p when recording so suitcase stays upright)"
+                )
         elif key == "k":
             if cpp_loop_running:
                 current_planner = cpp_mode == "PLANNER"

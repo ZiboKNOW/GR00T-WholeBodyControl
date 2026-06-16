@@ -180,6 +180,8 @@ class UnitreeSdk2Bridge:
     def cmd_received(self):
         with self.low_cmd_lock:
             low_cmd_received = self.low_cmd_received
+        if self.num_hand_motor == 0:
+            return low_cmd_received
         with self.left_hand_cmd_lock:
             left_hand_cmd_received = self.left_hand_cmd_received
         with self.right_hand_cmd_lock:
@@ -244,14 +246,25 @@ class UnitreeSdk2Bridge:
         with self.right_hand_cmd_lock:
             right_hand_q = [self.right_hand_cmd.motor_cmd[i].q for i in range(self.num_hand_motor)]
         with self.low_cmd_lock, self.left_hand_cmd_lock, self.right_hand_cmd_lock:
-            is_new_action = self.new_low_cmd and self.new_left_hand_cmd and self.new_right_hand_cmd
+            if self.num_hand_motor == 0:
+                is_new_action = self.new_low_cmd
+            else:
+                is_new_action = (
+                    self.new_low_cmd and self.new_left_hand_cmd and self.new_right_hand_cmd
+                )
             if is_new_action:
                 self.new_low_cmd = False
-                self.new_left_hand_cmd = False
-                self.new_right_hand_cmd = False
+                if self.num_hand_motor > 0:
+                    self.new_left_hand_cmd = False
+                    self.new_right_hand_cmd = False
+
+        if self.num_hand_motor == 0:
+            action_q = np.asarray(body_q, dtype=np.float64)
+        else:
+            action_q = np.concatenate([body_q[:-7], left_hand_q, body_q[-7:], right_hand_q])
 
         return (
-            np.concatenate([body_q[:-7], left_hand_q, body_q[-7:], right_hand_q]),
+            action_q,
             self.cmd_received(),
             is_new_action,
         )
@@ -386,7 +399,7 @@ class ElasticBand:
     ref: https://github.com/unitreerobotics/unitree_mujoco
     """
 
-    def __init__(self):
+    def __init__(self, use_angular: bool = True):
         self.kp_pos = 10000
         self.kd_pos = 1000
         self.kp_ang = 1000
@@ -394,6 +407,7 @@ class ElasticBand:
         self.point = np.array([-0.0, -0.0, 0.85])
         self.length = 0
         self.enable = True
+        self.use_angular = use_angular
 
     def Advance(self, pose):
         pos = pose[0:3]
@@ -404,11 +418,14 @@ class ElasticBand:
         δx = self.point - pos
         f = self.kp_pos * (δx + np.array([0, 0, self.length])) + self.kd_pos * (0 - lin_vel)
 
-        # Convert quaternion from MuJoCo [w,x,y,z] to scipy [x,y,z,w]
-        quat = np.array([quat[1], quat[2], quat[3], quat[0]])
-        rot = scipy.spatial.transform.Rotation.from_quat(quat)
-        rotvec = rot.as_rotvec()
-        torque = -self.kp_ang * rotvec - self.kd_ang * ang_vel
+        torque = np.zeros(3)
+        if self.use_angular:
+            # Convert quaternion from MuJoCo [w,x,y,z] to scipy [x,y,z,w]
+            quat_xyzw = np.array([quat[1], quat[2], quat[3], quat[0]], dtype=np.float64)
+            if np.linalg.norm(quat_xyzw) >= 1e-8:
+                rot = scipy.spatial.transform.Rotation.from_quat(quat_xyzw / np.linalg.norm(quat_xyzw))
+                rotvec = rot.as_rotvec()
+                torque = -self.kp_ang * rotvec - self.kd_ang * ang_vel
 
         return np.concatenate([f, torque])
 

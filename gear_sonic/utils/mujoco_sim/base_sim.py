@@ -27,6 +27,11 @@ from gear_sonic.utils.mujoco_sim.unitree_sdk2py_bridge import ElasticBand, Unitr
 from gear_sonic.utils.mujoco_sim.robot import Robot
 
 GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# omomo sub1_suitcase_011 frame 0: suitcase link origin in pelvis-yaw frame when the
+# robot stands at the origin facing +x (pelvis z=0.793). Geom offset (-0.1,0,0.2) keeps
+# the 0.2x0.3x0.4 m box upright with its 20x30 cm face on the floor.
+SUITCASE_SPAWN_POS = np.array([0.532087, -0.003498, 0.0])
+SUITCASE_SPAWN_QUAT = np.array([1.0, 0.0, 0.0, 0.0])
 INSPIRE_PASSIVE_HAND_MIMIC = {
     "thumb_intermediate": (1, 1.6),
     "thumb_distal": (1, 2.4),
@@ -204,7 +209,9 @@ class DefaultEnv:
 
         # Enable the elastic band
         if self.config["ENABLE_ELASTIC_BAND"] and self.use_floating_root_link:
-            self.elastic_band = ElasticBand()
+            self.elastic_band = ElasticBand(
+                use_angular=self.config.get("ELASTIC_BAND_USE_ANGULAR", True)
+            )
             if "g1" in self.config["ROBOT_TYPE"]:
                 if self.config["enable_waist"]:
                     self.band_attached_link = self.mj_model.body("pelvis").id
@@ -292,6 +299,69 @@ class DefaultEnv:
             self.torque_limit = limits
         self.torques = np.zeros(self.mj_model.nu)
         self.passive_hand_mimic_actuators = self._collect_passive_hand_mimic_actuators()
+        self._apply_spawn_pose()
+
+    def _apply_spawn_pose(self, reset_object: bool = True):
+        """Apply training-aligned default joint poses; optionally reset suitcase spawn."""
+        default_angles = self.robot.DEFAULT_DOF_ANGLES
+        for i, joint_id in enumerate(self.body_joint_index):
+            qadr = int(self.mj_model.jnt_qposadr[joint_id])
+            self.mj_data.qpos[qadr] = default_angles[i]
+
+        if reset_object:
+            suitcase_joint = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, "suitcase_root"
+            )
+            if suitcase_joint >= 0:
+                qadr = int(self.mj_model.jnt_qposadr[suitcase_joint])
+                # Suitcase link origin from omomo sub1_suitcase_011 frame 0 (pelvis-yaw frame).
+                # freejoint tracks the motion body origin; geom offset (-0.1,0,0.2) places the
+                # box upright (20x30 cm face on floor, 40 cm tall) without tilt or penetration.
+                self.mj_data.qpos[qadr : qadr + 3] = SUITCASE_SPAWN_POS
+                self.mj_data.qpos[qadr + 3 : qadr + 7] = SUITCASE_SPAWN_QUAT
+
+        self.mj_data.qvel[:] = 0.0
+        self.mj_data.ctrl[:] = 0.0
+        mujoco.mj_forward(self.mj_model, self.mj_data)
+
+    def _get_suitcase_state(self):
+        suitcase_joint = mujoco.mj_name2id(
+            self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, "suitcase_root"
+        )
+        if suitcase_joint < 0:
+            return None, None
+        qadr = int(self.mj_model.jnt_qposadr[suitcase_joint])
+        vadr = int(self.mj_model.jnt_dofadr[suitcase_joint])
+        return (
+            self.mj_data.qpos[qadr : qadr + 7].copy(),
+            self.mj_data.qvel[vadr : vadr + 6].copy(),
+        )
+
+    def _set_suitcase_state(self, qpos, qvel):
+        suitcase_joint = mujoco.mj_name2id(
+            self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, "suitcase_root"
+        )
+        if suitcase_joint < 0 or qpos is None or qvel is None:
+            return
+        qadr = int(self.mj_model.jnt_qposadr[suitcase_joint])
+        vadr = int(self.mj_model.jnt_dofadr[suitcase_joint])
+        self.mj_data.qpos[qadr : qadr + 7] = qpos
+        self.mj_data.qvel[vadr : vadr + 6] = qvel
+
+    def _reset_robot_pose(self):
+        """Reset only the floating base and body joints; preserve free objects."""
+        default_angles = self.robot.DEFAULT_DOF_ANGLES
+        if self.use_floating_root_link:
+            self.mj_data.qpos[0:3] = [0.0, 0.0, 0.8]
+            self.mj_data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+            self.mj_data.qvel[0:6] = 0.0
+        for i, joint_id in enumerate(self.body_joint_index):
+            qadr = int(self.mj_model.jnt_qposadr[joint_id])
+            vadr = int(self.mj_model.jnt_dofadr[joint_id])
+            self.mj_data.qpos[qadr] = default_angles[i]
+            self.mj_data.qvel[vadr] = 0.0
+        self.mj_data.ctrl[:] = 0.0
+        mujoco.mj_forward(self.mj_model, self.mj_data)
 
     def _collect_passive_hand_mimic_actuators(self):
         mimic_actuators = []
@@ -344,7 +414,11 @@ class DefaultEnv:
     def compute_body_torques(self) -> np.ndarray:
         # PD control: tau = tau_ff + kp * (q_des - q) + kd * (dq_des - dq)
         body_torques = np.zeros(self.num_body_dof)
-        if self.unitree_bridge is not None and self.unitree_bridge.low_cmd:
+        if (
+            self.unitree_bridge is not None
+            and self.unitree_bridge.low_cmd
+            and getattr(self.unitree_bridge, "low_cmd_received", False)
+        ):
             for i in range(self.unitree_bridge.num_body_motor):
                 if self.unitree_bridge.use_sensor:
                     body_torques[i] = (
@@ -616,13 +690,28 @@ class DefaultEnv:
             self.elastic_band.release()
 
     def check_fall(self):
+        if self.elastic_band and self.elastic_band.enable:
+            return
+
+        if not np.isfinite(self.mj_data.qpos[2]):
+            print("Warning: Sim state invalid (non-finite height), resetting")
+            self.reset()
+            return
+
         self.fall = False
         if self.mj_data.qpos[2] < 0.2:
             self.fall = True
             print(f"Warning: Robot has fallen, height: {self.mj_data.qpos[2]:.3f} m")
 
         if self.fall:
-            self.reset()
+            # Match git sim2sim: deploy InitControl ramps pose while elastic band holds.
+            # Auto-reset during active lowcmd fights PD and explodes the sim.
+            deploy_active = self.unitree_bridge is not None and getattr(
+                self.unitree_bridge, "low_cmd_received", False
+            )
+            if not deploy_active:
+                # Keep suitcase/object pose from physics; only stand the robot back up.
+                self.reset(reset_object=False)
 
     def check_self_collision(self):
         robot_bodies = get_subtree_body_names(self.mj_model, self.mj_model.body(self.root_body).id)
@@ -633,8 +722,16 @@ class DefaultEnv:
             print(f"Warning: Self-collision detected: {contact_bodies}")
         return self_collision
 
-    def reset(self):
-        mujoco.mj_resetData(self.mj_model, self.mj_data)
+    def reset(self, reset_object: bool = True):
+        if reset_object:
+            mujoco.mj_resetData(self.mj_model, self.mj_data)
+            self._apply_spawn_pose(reset_object=True)
+            return
+
+        suitcase_qpos, suitcase_qvel = self._get_suitcase_state()
+        self._reset_robot_pose()
+        self._set_suitcase_state(suitcase_qpos, suitcase_qvel)
+        mujoco.mj_forward(self.mj_model, self.mj_data)
 
 
 class BaseSimulator:
