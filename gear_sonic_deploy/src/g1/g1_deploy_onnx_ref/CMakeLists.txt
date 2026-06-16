@@ -146,7 +146,7 @@ if(ZMQ_INCLUDE_DIR AND ZMQ_LIBRARY)
   target_include_directories(zmq_pose_subscriber_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${ZMQ_INCLUDE_DIR})
-  target_link_libraries(zmq_pose_subscriber_test PRIVATE ${ZMQ_LIBRARY})
+  target_link_libraries(zmq_pose_subscriber_test PRIVATE ${ZMQ_LIBRARY} Threads::Threads)
   set_target_properties(zmq_pose_subscriber_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/target/release/"
     CXX_STANDARD 20
@@ -160,7 +160,7 @@ if(ZMQ_INCLUDE_DIR AND ZMQ_LIBRARY)
   target_include_directories(zmq_python_sender_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${ZMQ_INCLUDE_DIR})
-  target_link_libraries(zmq_python_sender_test PRIVATE ${ZMQ_LIBRARY})
+  target_link_libraries(zmq_python_sender_test PRIVATE ${ZMQ_LIBRARY} Threads::Threads)
   set_target_properties(zmq_python_sender_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/target/release/"
     CXX_STANDARD 20

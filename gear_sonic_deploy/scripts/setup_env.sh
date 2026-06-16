@@ -124,29 +124,29 @@ export OPENSSL_ROOT_DIR="/usr"
 ROS2_FOUND=false
 
 # Common ROS2 distributions in order of preference (newest first)
-ROS2_DISTROS=("jazzy" "iron" "humble" "galactic" "foxy" "eloquent" "dashing" "crystal")
-ROS2_INSTALL_PATHS=("/opt/ros" "/usr/local/ros" "$HOME/ros2_ws/install")
+# ROS2_DISTROS=("jazzy" "iron" "humble" "galactic" "foxy" "eloquent" "dashing" "crystal")
+# ROS2_INSTALL_PATHS=("/opt/ros" "/usr/local/ros" "$HOME/ros2_ws/install")
 
-for install_path in "${ROS2_INSTALL_PATHS[@]}"; do
-    if [ "$ROS2_FOUND" = true ]; then
-        break
-    fi
+# for install_path in "${ROS2_INSTALL_PATHS[@]}"; do
+#     if [ "$ROS2_FOUND" = true ]; then
+#         break
+#     fi
     
-    for distro in "${ROS2_DISTROS[@]}"; do
-        ros2_setup_file="$install_path/$distro/setup.bash"
-        if [ -f "$ros2_setup_file" ]; then
-            source "$ros2_setup_file"
-            export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-            # Remove problematic system library path that conflicts with system GLIBC
-            export LD_LIBRARY_PATH=$(echo $LD_LIBRARY_PATH | tr ':' '\n' | grep -v "$SYSTEM_LIB_DIR" | tr '\n' ':' | sed 's/:$//')
-            echo "✅ ROS2 $distro found at $install_path/$distro - system manages all ROS2 dependencies"
-            export HAS_ROS2=1
-            export ROS_LOCALHOST_ONLY=1
-            ROS2_FOUND=true
-            break
-        fi
-    done
-done
+#     for distro in "${ROS2_DISTROS[@]}"; do
+#         ros2_setup_file="$install_path/$distro/setup.bash"
+#         if [ -f "$ros2_setup_file" ]; then
+#             source "$ros2_setup_file"
+#             export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+#             # Remove problematic system library path that conflicts with system GLIBC
+#             export LD_LIBRARY_PATH=$(echo $LD_LIBRARY_PATH | tr ':' '\n' | grep -v "$SYSTEM_LIB_DIR" | tr '\n' ':' | sed 's/:$//')
+#             echo "✅ ROS2 $distro found at $install_path/$distro - system manages all ROS2 dependencies"
+#             export HAS_ROS2=1
+#             export ROS_LOCALHOST_ONLY=1
+#             ROS2_FOUND=true
+#             break
+#         fi
+#     done
+# done
 
 if [ "$ROS2_FOUND" = false ]; then
     echo "⚠️  ROS2 not found in common locations:"
