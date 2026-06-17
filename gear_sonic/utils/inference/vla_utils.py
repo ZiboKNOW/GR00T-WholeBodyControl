@@ -10,6 +10,51 @@ import numpy as np
 
 from gear_sonic.data.robot_model.robot_model import RobotModel
 
+NO_HAND_EMBODIMENT_TAGS = frozenset(
+    {
+        "unitree_g1_sonic_no_hand",
+        "unitree_g1_sonic_no_hand_wo_wrist",
+    }
+)
+NO_HAND_WO_WRIST_EMBODIMENT_TAG = "unitree_g1_sonic_no_hand_wo_wrist"
+
+_VLA_BODY_STATE_GROUPS = ("left_leg", "right_leg", "waist", "left_arm", "right_arm")
+_VLA_HAND_STATE_GROUPS = ("left_hand", "right_hand")
+
+
+def normalize_embodiment_tag(embodiment_tag: str) -> str:
+    return str(embodiment_tag).strip().lower()
+
+
+def is_no_hand_embodiment(embodiment_tag: str) -> bool:
+    return normalize_embodiment_tag(embodiment_tag) in NO_HAND_EMBODIMENT_TAGS
+
+
+def embodiment_uses_wrist_cameras(embodiment_tag: str) -> bool:
+    """True when the policy contract includes left/right wrist video keys."""
+    return normalize_embodiment_tag(embodiment_tag) == "unitree_g1_sonic_no_hand"
+
+
+def build_vla_state_from_configuration(
+    robot_model: RobotModel,
+    whole_q: np.ndarray,
+    *,
+    include_hands: bool = False,
+) -> dict[str, np.ndarray]:
+    """Split a full robot configuration into nested GR00T state groups."""
+    whole_q = np.asarray(whole_q, dtype=np.float32)
+    state: dict[str, np.ndarray] = {}
+    for group_name in _VLA_BODY_STATE_GROUPS:
+        indices = robot_model.get_joint_group_indices(group_name)
+        values = whole_q[..., indices]
+        state[group_name] = np.asarray(values, dtype=np.float32)[np.newaxis, np.newaxis]
+    if include_hands:
+        for group_name in _VLA_HAND_STATE_GROUPS:
+            indices = robot_model.get_joint_group_indices(group_name)
+            values = whole_q[..., indices]
+            state[group_name] = np.asarray(values, dtype=np.float32)[np.newaxis, np.newaxis]
+    return state
+
 
 def concat_action(robot_model: RobotModel, goal: Dict[str, Any]) -> Dict[str, Any]:
     """Process the action dict from the policy into a flat dict.

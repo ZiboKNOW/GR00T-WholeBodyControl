@@ -43,8 +43,11 @@ from gear_sonic.utils.data_collection.transforms import compute_projected_gravit
 from gear_sonic.utils.data_collection.zmq_state_subscriber import ZMQStateSubscriber
 from gear_sonic.utils.inference.initial_poses import LATENT_INITIAL_MOTION_TOKEN
 from gear_sonic.utils.inference.vla_utils import (
+    build_vla_state_from_configuration,
     calculate_latency_compensated_index,
     concat_action,
+    embodiment_uses_wrist_cameras,
+    is_no_hand_embodiment,
     should_trigger_new_inference,
 )
 from gear_sonic.utils.teleop.zmq.zmq_planner_sender import (
@@ -55,6 +58,13 @@ from gear_sonic.utils.teleop.zmq.zmq_planner_sender import (
 INSPIRE_HAND_DOF = 6
 INSPIRE_OPEN_HAND = np.array([-0.1, -0.1, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
 INSPIRE_CLOSED_HAND = np.array([1.3, 0.6, 1.7, 1.7, 1.7, 1.7], dtype=np.float32)
+MOTION_TOKEN_QUANTIZE_STEP = 0.0625
+
+
+def quantize_motion_token(motion_token: np.ndarray) -> np.ndarray:
+    """Snap motion tokens to the SONIC FSQ grid used during HDMI training."""
+    token = np.asarray(motion_token, dtype=np.float32)
+    return np.round(token / MOTION_TOKEN_QUANTIZE_STEP) * MOTION_TOKEN_QUANTIZE_STEP
 
 
 def _validate_hand_action(name: str, value: np.ndarray) -> np.ndarray:
@@ -84,7 +94,7 @@ class InferenceConfig:
     action_horizon: int = 40
     """Action horizon of the VLA policy (number of future actions per inference)."""
 
-    rate: float = 1 / 0.4
+    rate: float = 1 / 0.2
     """Rate at which we run the forward pass of the VLA policy (Hz)."""
 
     # Camera
@@ -116,7 +126,7 @@ class InferenceConfig:
     """ZMQ port for keyboard input."""
 
     # Embodiment
-    embodiment_tag: str = "unitree_g1_sonic_inspire"
+    embodiment_tag: str = "unitree_g1_sonic_no_hand_wo_wrist"
     """Embodiment tag for policy inference."""
 
     # Prompt / eval
@@ -155,6 +165,7 @@ def pack_latent_action_message(
         Packed ZMQ message bytes.
     """
     motion_token = np.asarray(motion_token, dtype=np.float32)
+    motion_token = quantize_motion_token(motion_token)
     frame_index = np.asarray(frame_index, dtype=np.int64)
 
     if frame_index.ndim == 0:
@@ -209,7 +220,9 @@ def prepare_observation_from_sensors(
     state_subscriber,
     robot_model,
     language_prompt: str,
+    embodiment_tag: str,
     log_errors: bool = False,
+    no_hand: bool = False,
 ):
     """Read sensors and prepare observation for the VLA policy.
 
@@ -231,42 +244,54 @@ def prepare_observation_from_sensors(
     cam_img = camera_msg["images"]["ego_view"]
 
     body_q = np.asarray(state_msg["body_q"], dtype=np.float32)
-    left_hand_q = np.asarray(state_msg["left_hand_q"], dtype=np.float32)
-    right_hand_q = np.asarray(state_msg["right_hand_q"], dtype=np.float32)
     if body_q.shape[-1] != 29:
         raise ValueError(f"body_q must have shape [29], got {body_q.shape}")
-    if left_hand_q.shape[-1] != INSPIRE_HAND_DOF:
-        raise ValueError(
-            f"left_hand_q must have shape [{INSPIRE_HAND_DOF}], got {left_hand_q.shape}"
-        )
-    if right_hand_q.shape[-1] != INSPIRE_HAND_DOF:
-        raise ValueError(
-            f"right_hand_q must have shape [{INSPIRE_HAND_DOF}], got {right_hand_q.shape}"
-        )
+    if not no_hand:
+        left_hand_q = np.asarray(state_msg["left_hand_q"], dtype=np.float32)
+        right_hand_q = np.asarray(state_msg["right_hand_q"], dtype=np.float32)
+        if left_hand_q.shape[-1] != INSPIRE_HAND_DOF:
+            raise ValueError(
+                f"left_hand_q must have shape [{INSPIRE_HAND_DOF}], got {left_hand_q.shape}"
+            )
+        if right_hand_q.shape[-1] != INSPIRE_HAND_DOF:
+            raise ValueError(
+                f"right_hand_q must have shape [{INSPIRE_HAND_DOF}], got {right_hand_q.shape}"
+            )
 
     video = {"ego_view": cam_img[np.newaxis, np.newaxis]}
-    if "left_wrist" in camera_msg["images"]:
-        video["left_wrist"] = camera_msg["images"]["left_wrist"][np.newaxis, np.newaxis]
-    if "right_wrist" in camera_msg["images"]:
-        video["right_wrist"] = camera_msg["images"]["right_wrist"][np.newaxis, np.newaxis]
+    if embodiment_uses_wrist_cameras(embodiment_tag):
+        for wrist_key in ("left_wrist", "right_wrist"):
+            if wrist_key not in camera_msg["images"]:
+                raise ValueError(
+                    f"{embodiment_tag} requires camera '{wrist_key}' "
+                    "(enable wrist cameras in run_sim_loop.py or use "
+                    "unitree_g1_sonic_no_hand_wo_wrist for ego_view only)"
+                )
+            video[wrist_key] = camera_msg["images"][wrist_key][np.newaxis, np.newaxis]
+
+    if not no_hand:
+        whole_q = robot_model.get_configuration_from_actuated_joints(
+            body_actuated_joint_values=body_q,
+            left_hand_actuated_joint_values=left_hand_q,
+            right_hand_actuated_joint_values=right_hand_q,
+        )
+    else:
+        whole_q = robot_model.get_configuration_from_actuated_joints(
+            body_actuated_joint_values=body_q,
+        )
 
     observation = {
         "video": video,
-        "state": {},
+        "state": build_vla_state_from_configuration(
+            robot_model,
+            whole_q,
+            include_hands=not no_hand,
+        ),
         "language": {
             "annotation.human.task_description": [[language_prompt]],
         },
         "timestamps": camera_msg["timestamps"]["ego_view"],
     }
-    observation["state"]["left_leg"] = body_q[0:6][np.newaxis, np.newaxis]
-    observation["state"]["right_leg"] = body_q[6:12][np.newaxis, np.newaxis]
-    observation["state"]["waist"] = body_q[12:15][np.newaxis, np.newaxis]
-    observation["state"]["left_arm"] = body_q[15:22][np.newaxis, np.newaxis]
-    observation["state"]["left_hand"] = left_hand_q[np.newaxis, np.newaxis]
-    observation["state"]["right_arm"] = body_q[22:29][np.newaxis, np.newaxis]
-    observation["state"]["right_hand"] = right_hand_q[np.newaxis, np.newaxis]
-
-    # Projected gravity for Sonic latent embodiment
     assert "base_quat" in state_msg, "base_quat not found in state_msg"
     base_quat = np.asarray(state_msg["base_quat"], dtype=np.float64)
     assert base_quat.shape == (4,), "base_quat must have shape (4,)"
@@ -360,6 +385,7 @@ def _inference_worker_loop(
 
 def main(config: InferenceConfig):
     pause_loop = True
+    no_hand = is_no_hand_embodiment(config.embodiment_tag)
 
     robot_model = instantiate_g1_robot_model(waist_location="lower_and_upper_body")
 
@@ -391,6 +417,11 @@ def main(config: InferenceConfig):
         f"ZMQ action socket bound to tcp://{config.action_zmq_host}:{config.action_zmq_port}"
     )
     print_green(f"Using embodiment tag: {config.embodiment_tag}")
+    if no_hand:
+        print_green(
+            "No-hand mode: VLA publishes motion_token only; "
+            "sim hands stay at C++ deploy default pose."
+        )
 
     keyboard_listener = ZMQKeyboardSubscriber(
         port=config.keyboard_zmq_port, host=config.keyboard_zmq_host
@@ -422,12 +453,18 @@ def main(config: InferenceConfig):
             if initial_pose_right_hand_closed
             else INSPIRE_OPEN_HAND.copy()
         )
-        zmq_message = pack_latent_action_message(
-            motion_token=LATENT_INITIAL_MOTION_TOKEN,
-            frame_index=np.array([0], dtype=np.int64),
-            left_hand_joints=left_hand,
-            right_hand_joints=right_hand,
-        )
+        if no_hand:
+            zmq_message = pack_latent_action_message(
+                motion_token=LATENT_INITIAL_MOTION_TOKEN,
+                frame_index=np.array([0], dtype=np.int64),
+            )
+        else:
+            zmq_message = pack_latent_action_message(
+                motion_token=LATENT_INITIAL_MOTION_TOKEN,
+                frame_index=np.array([0], dtype=np.int64),
+                left_hand_joints=left_hand,
+                right_hand_joints=right_hand,
+            )
         zmq_socket.send(zmq_message)
         print_green("Sent latent initial pose via ZMQ")
         time.sleep(1.0)
@@ -512,6 +549,13 @@ def main(config: InferenceConfig):
                 print("Policy loop paused (C++ loop still running - press 'k' to stop)")
             else:
                 print("Policy loop resumed")
+                last_inference_time = 0.0
+                action_chunk_index = 0
+                cached_action_chunk = None
+                print(
+                    "Cleared cached action chunk — wait for a fresh inference "
+                    "(press c before p when recording so suitcase stays upright)"
+                )
         elif key == "k":
             if cpp_loop_running:
                 current_planner = cpp_mode == "PLANNER"
@@ -558,7 +602,9 @@ def main(config: InferenceConfig):
                 state_subscriber=state_subscriber,
                 robot_model=robot_model,
                 language_prompt=language_prompt_ref[0],
+                embodiment_tag=config.embodiment_tag,
                 log_errors=True,
+                no_hand=no_hand,
             ),
             lambda obs: run_policy_inference_and_process(
                 policy=n1_policy,
@@ -626,49 +672,55 @@ def main(config: InferenceConfig):
                         get_action_field(processed_action, "motion_token"),
                         dtype=np.float32,
                     )
-                    left_hand_joints = np.asarray(
-                        get_action_field(processed_action, "left_hand_joints"),
-                        dtype=np.float32,
-                    )
-                    right_hand_joints = np.asarray(
-                        get_action_field(processed_action, "right_hand_joints"),
-                        dtype=np.float32,
-                    )
-                    left_hand_joints = _validate_hand_action(
-                        "left_hand_joints", left_hand_joints
-                    )
-                    right_hand_joints = _validate_hand_action(
-                        "right_hand_joints", right_hand_joints
-                    )
 
                     # Action arrays arrive as (B, T, D) from the model.
                     # Squeeze batch dim to get (T, D), then index by time step.
                     if motion_token.ndim == 3:
                         motion_token = motion_token[0]
-                    if left_hand_joints.ndim == 3:
-                        left_hand_joints = left_hand_joints[0]
-                    if right_hand_joints.ndim == 3:
-                        right_hand_joints = right_hand_joints[0]
 
                     horizon = motion_token.shape[0] if motion_token.ndim == 2 else 1
                     current_idx = min(action_chunk_index, horizon - 1)
 
                     if motion_token.ndim == 2:
                         motion_token = motion_token[current_idx]
-                    if left_hand_joints.ndim == 2:
-                        left_hand_joints = left_hand_joints[current_idx]
-                    if right_hand_joints.ndim == 2:
-                        right_hand_joints = right_hand_joints[current_idx]
 
                     frame_index = np.array([zmq_frame_counter], dtype=np.int64)
                     zmq_frame_counter += 1
 
-                    zmq_message = pack_latent_action_message(
-                        motion_token,
-                        frame_index,
-                        left_hand_joints=left_hand_joints,
-                        right_hand_joints=right_hand_joints,
-                    )
+                    if no_hand:
+                        zmq_message = pack_latent_action_message(
+                            motion_token,
+                            frame_index,
+                        )
+                    else:
+                        left_hand_joints = np.asarray(
+                            get_action_field(processed_action, "left_hand_joints"),
+                            dtype=np.float32,
+                        )
+                        right_hand_joints = np.asarray(
+                            get_action_field(processed_action, "right_hand_joints"),
+                            dtype=np.float32,
+                        )
+                        left_hand_joints = _validate_hand_action(
+                            "left_hand_joints", left_hand_joints
+                        )
+                        right_hand_joints = _validate_hand_action(
+                            "right_hand_joints", right_hand_joints
+                        )
+                        if left_hand_joints.ndim == 3:
+                            left_hand_joints = left_hand_joints[0]
+                        if right_hand_joints.ndim == 3:
+                            right_hand_joints = right_hand_joints[0]
+                        if left_hand_joints.ndim == 2:
+                            left_hand_joints = left_hand_joints[current_idx]
+                        if right_hand_joints.ndim == 2:
+                            right_hand_joints = right_hand_joints[current_idx]
+                        zmq_message = pack_latent_action_message(
+                            motion_token,
+                            frame_index,
+                            left_hand_joints=left_hand_joints,
+                            right_hand_joints=right_hand_joints,
+                        )
                     zmq_socket.send(zmq_message)
                     if zmq_frame_counter % 50 == 0:
                         print_green(

@@ -1,7 +1,9 @@
-# copy from g1_43dof_hist.yaml
+# 29-DOF G1 rubber-hand (unitree_ros g1_29dof) + HDMI suitcase for unitree_g1_sonic_no_hand sim2sim
+# Visual: rubber_hand geoms + eef_box wrist contacts (matches train_move_suitcase_sonic).
+# Control: 29 body DOFs only — no Inspire hand motors/joints (NUM_HAND_* = 0).
 ROBOT_TYPE: 'g1_29dof' # Robot name, "go2", "b2", "b2w", "h1", "go2w", "g1" 
 #ROBOT_SCENE: "gear_sonic/data/robot_model/model_data/g1/scene_43dof.xml" # Robot scene, for Sim2Sim
-ROBOT_SCENE: "gear_sonic/data/robot_model/model_data/g1/g1_description/scene_suitcase_43dof.xml"
+ROBOT_SCENE: "gear_sonic/data/robot_model/model_data/g1/g1_29dof_nohand/g1_29dof_rubberhand_suitcase_sim.xml"
 # ROBOT_SCENE: "gear_sonic/data/robot_model/model_data/g1/scene_29dof_activated3dex.xml"
 
 DOMAIN_ID: 0 # Domain id
@@ -150,8 +152,9 @@ WeakMotorJointIndex:
 
 NUM_MOTORS: 29
 NUM_JOINTS: 29
-NUM_HAND_MOTORS: 6
-NUM_HAND_JOINTS: 6
+NUM_HAND_MOTORS: 0
+NUM_HAND_JOINTS: 0
+with_hands: false
 LEFT_HAND_JOINT_PREFIX: "L_"
 RIGHT_HAND_JOINT_PREFIX: "R_"
 NUM_UPPER_BODY_JOINTS: 17
@@ -178,14 +181,14 @@ DEFAULT_DOF_ANGLES: [
     0.0,  # left_elbow_joint
     0.0,  # left_wrist_roll_joint
     0.0,  # left_wrist_pitch_joint
-    0.0,  # left_wrist_yaw_joint
+    -0.4,  # left_wrist_yaw_joint (move_suitcase_sonic training init)
     0.0,  # right_shoulder_pitch_joint
     0.0,  # right_shoulder_roll_joint
     0.0,  # right_shoulder_yaw_joint
     0.0,  # right_elbow_joint
     0.0,  # right_wrist_roll_joint
     0.0,  # right_wrist_pitch_joint
-    0.0   # right_wrist_yaw_joint
+    0.4   # right_wrist_yaw_joint (move_suitcase_sonic training init)
 ]
 
 DEFAULT_MOTOR_ANGLES: [
@@ -210,14 +213,14 @@ DEFAULT_MOTOR_ANGLES: [
     0.0,  # left_elbow_joint
     0.0,  # left_wrist_roll_joint
     0.0,  # left_wrist_pitch_joint
-    0.0,  # left_wrist_yaw_joint
+    -0.4,  # left_wrist_yaw_joint
     0.0,  # right_shoulder_pitch_joint
     0.0,  # right_shoulder_roll_joint
     0.0,  # right_shoulder_yaw_joint
     0.0,  # right_elbow_joint
     0.0,  # right_wrist_roll_joint
     0.0,  # right_wrist_pitch_joint
-    0.0   # right_wrist_yaw_joint
+    0.4   # right_wrist_yaw_joint
 ]
 
 motor_pos_lower_limit_list: [-2.5307, -0.5236, -2.7576, -0.087267, -0.87267, -0.2618, 

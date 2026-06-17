@@ -330,7 +330,11 @@ class GrootDataCollector:
             key = "c"
             self._manager_toggle_dc = False
 
-        if key == "c":
+        if key == "s":
+            if self._episode_state.get_state() == self._episode_state.RECORDING:
+                self._episode_state.change_state()
+                self._print_and_say("Stopping recording, preparing to save", blocking=False)
+        elif key == "c":
             self._episode_state.change_state()
             if self._episode_state.get_state() == self._episode_state.RECORDING:
                 self._initial_yaw = None
