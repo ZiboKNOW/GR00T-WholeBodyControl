@@ -30,7 +30,7 @@ GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 # omomo sub1_suitcase_011 frame 0: suitcase link origin in pelvis-yaw frame when the
 # robot stands at the origin facing +x (pelvis z=0.793). Geom offset (-0.1,0,0.2) keeps
 # the 0.2x0.3x0.4 m box upright with its 20x30 cm face on the floor.
-SUITCASE_SPAWN_POS = np.array([0.532087, -0.003498, 0.0])
+SUITCASE_OFFSET_PELVIS_YAW = np.array([0.532087, -0.003498, 0.0])
 SUITCASE_SPAWN_QUAT = np.array([1.0, 0.0, 0.0, 0.0])
 INSPIRE_PASSIVE_HAND_MIMIC = {
     "thumb_intermediate": (1, 1.6),
@@ -55,11 +55,15 @@ EGO_VIEW_CAMERA_CONFIGS = {
     "ego_view": {"height": 480, "width": 640, "mjcf_name": "head_camera"},
 }
 
-FULL_SIM_CAMERA_CONFIGS = {
+EGO_AND_GLOBAL_CAMERA_CONFIGS = {
     **EGO_VIEW_CAMERA_CONFIGS,
+    "global_view": {"height": 480, "width": 640, "mjcf_name": "global_view"},
+}
+
+FULL_SIM_CAMERA_CONFIGS = {
+    **EGO_AND_GLOBAL_CAMERA_CONFIGS,
     "left_wrist": {"height": 480, "width": 640, "mjcf_name": "left_wrist_camera"},
     "right_wrist": {"height": 480, "width": 640, "mjcf_name": "right_wrist_camera"},
-    "global_view": {"height": 480, "width": 640, "mjcf_name": "global_view"},
 }
 
 
@@ -87,7 +91,10 @@ class DefaultEnv:
         self.camera_configs = camera_configs
 
         if not camera_configs and offscreen and enable_image_publish:
-            self.camera_configs = dict(FULL_SIM_CAMERA_CONFIGS)
+            if config.get("EGO_VIEW_ONLY", False):
+                self.camera_configs = dict(EGO_AND_GLOBAL_CAMERA_CONFIGS)
+            else:
+                self.camera_configs = dict(FULL_SIM_CAMERA_CONFIGS)
 
         self.reward_lock = Lock()
         self.unitree_bridge = None
@@ -308,6 +315,24 @@ class DefaultEnv:
         self.passive_hand_mimic_actuators = self._collect_passive_hand_mimic_actuators()
         self._apply_spawn_pose()
 
+    def _compute_suitcase_world_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        """Map pelvis-yaw horizontal offset to world frame; freejoint z stays on the floor."""
+        pelvis_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
+        pelvis_pos = self.mj_data.xpos[pelvis_id]
+        pelvis_mat = self.mj_data.xmat[pelvis_id].reshape(3, 3)
+        yaw = np.arctan2(pelvis_mat[1, 0], pelvis_mat[0, 0])
+        c, s = np.cos(yaw), np.sin(yaw)
+        offset_xy = np.array(
+            [
+                c * SUITCASE_OFFSET_PELVIS_YAW[0] - s * SUITCASE_OFFSET_PELVIS_YAW[1],
+                s * SUITCASE_OFFSET_PELVIS_YAW[0] + c * SUITCASE_OFFSET_PELVIS_YAW[1],
+                0.0,
+            ]
+        )
+        world_pos = pelvis_pos + offset_xy
+        world_pos[2] = 0.0
+        return world_pos, SUITCASE_SPAWN_QUAT.copy()
+
     def _apply_spawn_pose(self, reset_object: bool = True):
         """Apply training-aligned default joint poses; optionally reset suitcase spawn."""
         default_angles = self.robot.DEFAULT_DOF_ANGLES
@@ -315,21 +340,22 @@ class DefaultEnv:
             qadr = int(self.mj_model.jnt_qposadr[joint_id])
             self.mj_data.qpos[qadr] = default_angles[i]
 
+        self.mj_data.qvel[:] = 0.0
+        self.mj_data.ctrl[:] = 0.0
+        mujoco.mj_forward(self.mj_model, self.mj_data)
+
         if reset_object:
             suitcase_joint = mujoco.mj_name2id(
                 self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, "suitcase_root"
             )
             if suitcase_joint >= 0:
                 qadr = int(self.mj_model.jnt_qposadr[suitcase_joint])
-                # Suitcase link origin from omomo sub1_suitcase_011 frame 0 (pelvis-yaw frame).
+                spawn_pos, spawn_quat = self._compute_suitcase_world_pose()
                 # freejoint tracks the motion body origin; geom offset (-0.1,0,0.2) places the
                 # box upright (20x30 cm face on floor, 40 cm tall) without tilt or penetration.
-                self.mj_data.qpos[qadr : qadr + 3] = SUITCASE_SPAWN_POS
-                self.mj_data.qpos[qadr + 3 : qadr + 7] = SUITCASE_SPAWN_QUAT
-
-        self.mj_data.qvel[:] = 0.0
-        self.mj_data.ctrl[:] = 0.0
-        mujoco.mj_forward(self.mj_model, self.mj_data)
+                self.mj_data.qpos[qadr : qadr + 3] = spawn_pos
+                self.mj_data.qpos[qadr + 3 : qadr + 7] = spawn_quat
+                mujoco.mj_forward(self.mj_model, self.mj_data)
 
     def _get_suitcase_state(self):
         suitcase_joint = mujoco.mj_name2id(
@@ -359,8 +385,8 @@ class DefaultEnv:
         """Reset only the floating base and body joints; preserve free objects."""
         default_angles = self.robot.DEFAULT_DOF_ANGLES
         if self.use_floating_root_link:
-            self.mj_data.qpos[0:3] = [0.0, 0.0, 0.8]
-            self.mj_data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+            self.mj_data.qpos[0:3] = self.mj_model.qpos0[0:3]
+            self.mj_data.qpos[3:7] = self.mj_model.qpos0[3:7]
             self.mj_data.qvel[0:6] = 0.0
         for i, joint_id in enumerate(self.body_joint_index):
             qadr = int(self.mj_model.jnt_qposadr[joint_id])

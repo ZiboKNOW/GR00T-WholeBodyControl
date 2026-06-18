@@ -51,6 +51,7 @@ class SimulatorFactory:
             onscreen=kwargs.pop("onscreen", True),
             offscreen=kwargs.pop("offscreen", False),
             enable_image_publish=kwargs.get("enable_image_publish", False),
+            camera_configs=kwargs.pop("camera_configs", {}),
             config=config,
             env_name=env_name,
             redis_client=kwargs.get("redis_client", None),

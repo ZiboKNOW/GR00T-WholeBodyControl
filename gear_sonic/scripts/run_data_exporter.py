@@ -107,7 +107,7 @@ class SonicDataExporterConfig:
     robot_config_timeout: float = 0
     """Seconds to wait for the ZMQ robot_config message at startup (0 = wait forever)."""
 
-    record_wrist_cameras: bool = True
+    record_wrist_cameras: bool = False
     """Record wrist camera streams (left_wrist, right_wrist). Requires cameras to be available."""
 
     record_global_view: bool = True
@@ -945,6 +945,8 @@ def main(config: SonicDataExporterConfig):
                 modality_config[key].update(value)
             else:
                 modality_config[key] = value
+    else:
+        print("[Camera] Wrist cameras disabled — recording ego_view (+ global_view if sim publishes it)")
 
     if config.record_global_view:
         print("[Camera] Global overview camera enabled — adding to dataset schema")

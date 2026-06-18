@@ -91,6 +91,9 @@ def override_wbc_config(
         "enable_natural_walk": config.enable_natural_walk,
     }
 
+    if hasattr(config, "ego_view_only"):
+        key_to_value["EGO_VIEW_ONLY"] = config.ego_view_only
+
     if missed_keys_only:
         for key in key_to_value:
             if key not in wbc_config:
@@ -345,7 +348,7 @@ class SimLoopConfig(BaseConfig):
     """Camera port for image publishing"""
 
     ego_view_only: bool = False
-    """Publish only ego_view (640x480 head_camera), matching Isaac render_vla."""
+    """Publish ego_view + global_view (no wrist cameras). VLA inference uses ego_view only."""
 
     verbose: bool = False
     """Verbose output, override the base config verbose"""

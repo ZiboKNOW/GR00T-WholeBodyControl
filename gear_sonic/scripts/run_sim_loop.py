@@ -8,7 +8,7 @@ from typing import Dict
 
 import tyro
 
-from gear_sonic.utils.mujoco_sim.base_sim import EGO_VIEW_CAMERA_CONFIGS, FULL_SIM_CAMERA_CONFIGS
+from gear_sonic.utils.mujoco_sim.base_sim import EGO_AND_GLOBAL_CAMERA_CONFIGS, FULL_SIM_CAMERA_CONFIGS
 from gear_sonic.utils.mujoco_sim.simulator_factory import SimulatorFactory, init_channel
 from gear_sonic.utils.mujoco_sim.configs import SimLoopConfig
 from gear_sonic.data.robot_model.instantiation.g1 import (
@@ -49,7 +49,7 @@ def main(config: ArgsConfig):
     camera_configs = {}
     if config.enable_image_publish:
         camera_configs = (
-            dict(EGO_VIEW_CAMERA_CONFIGS)
+            dict(EGO_AND_GLOBAL_CAMERA_CONFIGS)
             if config.ego_view_only
             else dict(FULL_SIM_CAMERA_CONFIGS)
         )
