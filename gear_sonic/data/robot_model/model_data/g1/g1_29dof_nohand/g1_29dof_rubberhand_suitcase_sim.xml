@@ -1,0 +1,27 @@
+<mujoco model="g1_29dof_rubberhand_suitcase_sim">
+  <include file="../g1_description/g1_29dof_inspire_nohand_rubberhand.xml"/>
+  <include file="objects/suitcase/suitcase-simplified_training.xml"/>
+
+  <statistic center="0 0 0.5" extent="2.0"/>
+
+  <visual>
+    <headlight diffuse="0 0 0" ambient="0.36 0.40 0.48" specular="0 0 0"/>
+    <rgba haze="0.72 0.80 0.95 1"/>
+    <global azimuth="-130" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="flat" rgb1="0.72 0.80 0.95" rgb2="0.72 0.80 0.95" width="512" height="3072"/>
+    <material name="groundplane" rgba="0.03 0.07 0.16 1" reflectance="0.0"/>
+  </asset>
+
+  <worldbody>
+    <light name="key_light" pos="0 0 3" dir="0 0 -1" directional="true" diffuse="1.0 0.95 0.86" ambient="0 0 0" specular="0 0 0"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+    <camera name="global_view" pos="2.910 -5.040 3.860" xyaxes="0.866 0.500 0.000 -0.250 0.433 0.866"/>
+  </worldbody>
+
+  <default>
+    <geom friction="1.0"/>
+  </default>
+</mujoco>

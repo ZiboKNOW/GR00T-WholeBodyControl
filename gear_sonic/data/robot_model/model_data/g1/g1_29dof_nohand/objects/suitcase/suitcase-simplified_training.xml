@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<mujoco model="suitcase">
+  <!-- Init pose: omomo sub1_suitcase_011 frame 0 in pelvis-yaw frame (robot at origin, pelvis z=0.793).
+       freejoint at the suitcase link origin; geom offset places the 0.2 x 0.3 x 0.4 m box upright
+       with its 20 x 30 cm face on the floor (z=0).
+       NOTE: spawn pose is set in base_sim._apply_spawn_pose; keep XML default in sync. -->
+  <worldbody>
+    <body name="suitcase" pos="0.532087 -0.003498 0">
+      <freejoint name="suitcase_root"/>
+      <!-- Box 0.2 x 0.3 x 0.4 m (half-sizes 0.1/0.15/0.2), mass 2 kg; inertia at link origin -->
+      <inertial mass="0.47" pos="-0.1 0 0.2" diaginertia="0.04167 0.03333 0.02167"/>
+
+      <geom type="box" size="0.1 0.15 0.2" pos="-0.1 0.0 0.2" rgba="0.55 0.35 0.15 1"/>
+    </body>
+  </worldbody>
+  <sensor>
+    <framepos name="suitcase_pos" objtype="xbody" objname="suitcase"/>
+    <framequat name="suitcase_quat" objtype="xbody" objname="suitcase"/>
+  </sensor>
+</mujoco>
