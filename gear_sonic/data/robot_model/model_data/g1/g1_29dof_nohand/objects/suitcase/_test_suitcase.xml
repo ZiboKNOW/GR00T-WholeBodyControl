@@ -1,0 +1,1 @@
+<mujoco><worldbody><body name="suitcase" pos="0.26773005 -0.01392591 0"><freejoint name="suitcase_root"/><inertial mass="2" pos="0 0 0" diaginertia="0.04167 0.03333 0.02167"/><geom type="box" size="0.1 0.15 0.2"/></body></worldbody></mujoco>

@@ -65,7 +65,7 @@ TRAINING_EFFORT_LIMITS: dict[str, float] = {
 
 # Isaac Sim / HDMI render_vla ego_view: d435 mount + front_cam offset on torso_link.
 # (Differs from training URDF d435 z=0.41987; sim2sim uses this mount for correct ego_view.)
-ISAAC_D435_LINK_POS = (0.0576235, 0.01753, 0.42987)
+ISAAC_D435_LINK_POS = (0.0576235, 0.01753, 0.41987)
 ISAAC_D435_LINK_QUAT = (0.91496, 0.0, 0.403545, 0.0)
 ISAAC_HEAD_CAMERA_POS = (0.01, 0.0, 0.0)
 ISAAC_HEAD_CAMERA_QUAT = (0.5, 0.5, -0.5, -0.5)
@@ -190,18 +190,18 @@ SCENE_WRAPPER = """<mujoco model="g1_29dof_rubberhand_suitcase_sim">
   <statistic center="0 0 0.5" extent="2.0"/>
 
   <visual>
-    <headlight diffuse="0 0 0" ambient="0.36 0.40 0.48" specular="0 0 0"/>
-    <rgba haze="0.72 0.80 0.95 1"/>
-    <global azimuth="-130" elevation="-20"/>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="120" elevation="-20"/>
   </visual>
 
   <asset>
-    <texture type="skybox" builtin="flat" rgb1="0.72 0.80 0.95" rgb2="0.72 0.80 0.95" width="512" height="3072"/>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
     <material name="groundplane" rgba="0.03 0.07 0.16 1" reflectance="0.0"/>
   </asset>
 
   <worldbody>
-    <light name="key_light" pos="0 0 3" dir="0 0 -1" directional="true" diffuse="1.0 0.95 0.86" ambient="0 0 0" specular="0 0 0"/>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
     <camera name="global_view" pos="2.910 -5.040 3.860" xyaxes="0.866 0.500 0.000 -0.250 0.433 0.866"/>
   </worldbody>
