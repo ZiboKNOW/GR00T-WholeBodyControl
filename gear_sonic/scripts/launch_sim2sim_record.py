@@ -5,22 +5,25 @@ One-click sim2sim VLA recorder for the suitcase no-hand checkpoint (29-DOF G1).
 Uses the unitree_ros ``g1_29dof`` rubber-hand suitcase scene with ego_view camera (640x480),
 aligned with Isaac ``render_vla`` / ``unitree_g1_sonic_no_hand_wo_wrist``.
 
-Starts all six stack components as background processes, waits for readiness,
-sends keyboard commands automatically (k -> i -> p -> c -> ... -> s), then
-shuts everything down and prints the recorded video paths.
+Mirrors ``sim2sim.md`` end-to-end:
+  1. (optional) build MuJoCo scene
+  2. PolicyServer -> MuJoCo sim -> C++ deploy (wait ``Init Done`` on elastic band)
+  3. VLA inference + data exporter
+  4. Auto keyboard: k -> 2s -> i -> 2s -> c -> p -> ... 30s -> s
+  5. Shutdown and print recorded video paths
 
 Usage (from GR00T-WholeBodyControl repo root):
 
     python gear_sonic/scripts/launch_sim2sim_record.py
 
     python gear_sonic/scripts/launch_sim2sim_record.py \\
-        --record-seconds 20 \\
-        --model-path /home/ubuntu/DATA4/zzb/chekpoint_suitcase_final/checkpoint-25000
+        --record-seconds 30 \\
+        --model-path /home/ubuntu/DATA4/zzb/checkpoint_suitcase_slow_1_5/checkpoint-50000
 
 Prerequisites:
     - .venv_sim, .venv_inference, .venv_data_collection
     - gear_sonic_deploy built (deploy.sh)
-    - Isaac-GR00T with `uv` (for PolicyServer)
+    - Isaac-GR00T venv (for PolicyServer)
 """
 
 from __future__ import annotations
@@ -87,7 +90,7 @@ from gear_sonic.utils.data_collection.zmq_state_subscriber import (
 class Sim2SimRecordConfig:
     """CLI for automated sim2sim recording."""
 
-    model_path: str = "/home/ubuntu/DATA4/zzb/chekpoint_suitcase_final/checkpoint-25000"
+    model_path: str = "/home/ubuntu/DATA4/zzb/checkpoint_suitcase_slow_1_5/checkpoint-50000"
     """Path to the finetuned Isaac-GR00T checkpoint."""
 
     embodiment_tag: str = "unitree_g1_sonic_no_hand_wo_wrist"
@@ -96,7 +99,7 @@ class Sim2SimRecordConfig:
     prompt: str = "Pick up the suitcase in front of you and move it."
     """Language prompt for VLA inference and the dataset metadata."""
 
-    record_seconds: float = 20.0
+    record_seconds: float = 30.0
     """How long to record after pressing 'c' (seconds)."""
 
     gpu_id: int = 10
@@ -104,6 +107,8 @@ class Sim2SimRecordConfig:
 
     policy_host: str = "localhost"
     policy_port: int = 5550
+    deploy_state_host: str = "localhost"
+    """Host for C++ deploy ZMQ state/config (port 5557)."""
     camera_host: str = "localhost"
     camera_port: int = 5555
 
@@ -123,16 +128,22 @@ class Sim2SimRecordConfig:
     skip_policy_server: bool = False
     """Skip launching PolicyServer (use if one is already running on policy_port)."""
 
+    skip_scene_build: bool = False
+    """Skip running build_rubberhand_suitcase_scene.py before MuJoCo."""
+
     keep_processes: bool = False
     """Leave background processes running after the script finishes."""
 
     startup_timeout: float = 300.0
     """Max seconds to wait for PolicyServer + camera + deploy config."""
 
-    sim_warmup_seconds: float = 2.0
-    """Seconds after MuJoCo starts before k/i/p (sim2sim.md: press keys once sim is up)."""
+    pose_stable_seconds: float = 2.0
+    """Seconds to wait after 'i' before 'c' (manual: i then wait ~2s)."""
 
-    save_timeout: float = 60.0
+    key_after_k_seconds: float = 2.0
+    """Seconds to wait after 'k' before 'i' (manual: k then wait ~2s)."""
+
+    save_timeout: float = 90.0
     """Max seconds to wait for mp4 finalize after pressing 's'."""
 
 
@@ -178,10 +189,13 @@ def _subprocess_env() -> dict[str, str]:
         env.pop(key, None)
     if HF_CACHE_ROOT.is_dir():
         env["HF_HOME"] = str(HF_CACHE_ROOT)
-        env["HUGGINGFACE_HUB_CACHE"] = str(HF_CACHE_ROOT / "hub")
+        hub_cache = str(HF_CACHE_ROOT / "hub")
+        env["HF_HUB_CACHE"] = hub_cache
+        env["HUGGINGFACE_HUB_CACHE"] = hub_cache
     # Isaac-GR00T patches: prefer local HF cache, skip spurious Hub calls (Cosmos/Qwen3).
     env["GROOT_HF_LOCAL_FIRST"] = "1"
     env["GROOT_PATCH_MISTRAL"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
     return env
 
 
@@ -194,6 +208,7 @@ def _shell_preamble() -> str:
     ]
     if HF_CACHE_ROOT.is_dir():
         parts.append(f"export HF_HOME={HF_CACHE_ROOT}")
+        parts.append(f"export HF_HUB_CACHE={HF_CACHE_ROOT}/hub")
         parts.append(f"export HUGGINGFACE_HUB_CACHE={HF_CACHE_ROOT}/hub")
     return "; ".join(parts) + "; "
 
@@ -206,6 +221,8 @@ def _cleanup_stale_processes(ports: list[int]) -> None:
         "run_vla_inference.py",
         "run_data_exporter.py",
         "g1_deploy_onnx_ref",
+        "g1_deploy",
+        "deploy.sh",
         "keyboard_publisher.py",
     ]
     for pattern in patterns:
@@ -222,7 +239,7 @@ class _ProcGroup:
         self.name = name
         self.log_path = log_path
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        self._log_file = open(log_path, "w", encoding="utf-8")
+        self._log_file = open(log_path, "w", encoding="utf-8", buffering=1)
         self._proc = subprocess.Popen(
             ["bash", "-c", cmd],
             cwd=str(cwd or REPO_ROOT),
@@ -285,8 +302,11 @@ def _wait_until(
     desc: str,
     poll: float = 0.5,
     processes: list["_ProcGroup"] | None = None,
+    progress_interval: float = 15.0,
 ) -> None:
     deadline = time.monotonic() + timeout
+    last_progress = time.monotonic()
+    print(f"[wait] {desc} (timeout {timeout:.0f}s)")
     while time.monotonic() < deadline:
         if processes:
             for proc in processes:
@@ -298,8 +318,45 @@ def _wait_until(
         if predicate():
             print(f"[ready] {desc}")
             return
+        now = time.monotonic()
+        if progress_interval > 0 and now - last_progress >= progress_interval:
+            remaining = max(0.0, deadline - now)
+            print(f"[wait] still waiting: {desc} ({remaining:.0f}s left)")
+            last_progress = now
         time.sleep(poll)
     raise TimeoutError(f"Timed out waiting for: {desc}")
+
+
+def _log_contains(log_path: Path, marker: str) -> bool:
+    if not log_path.is_file():
+        return False
+    return marker in log_path.read_text(errors="replace")
+
+
+def _send_key_and_wait_log(
+    keyboard: KeyboardAutomation,
+    key: str,
+    log_path: Path,
+    marker: str,
+    timeout: float,
+    processes: list["_ProcGroup"] | None = None,
+) -> None:
+    """Send one keyboard event and wait until it appears in a service log.
+
+    ZMQ keyboard subscribers use CONFLATE=1, so keys must be sent one at a time
+    and acknowledged before the next key — otherwise only the last key survives.
+    """
+    print(f"[keyboard] sending '{key}' -> expect {marker!r} in {log_path.name}")
+    keyboard.send(key)
+    _wait_until(
+        lambda: _log_contains(log_path, marker),
+        timeout,
+        f"keyboard '{key}' -> {marker!r}",
+        poll=0.2,
+        processes=processes,
+        progress_interval=10.0,
+    )
+    time.sleep(0.3)
 
 
 def _policy_server_ready(host: str, port: int) -> bool:
@@ -360,33 +417,46 @@ def _mujoco_log_text(log_path: Path) -> str:
     return log_path.read_text(errors="replace")
 
 
-def _release_elastic_band(
-    keyboard: KeyboardAutomation,
-    mujoco_proc: "_ProcGroup",
-    log_path: Path,
-    timeout: float = 15.0,
-) -> None:
-    """Spam k until sim logs ElasticBand released (ZMQ slow-joiner safe)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if mujoco_proc.poll() is not None:
-            raise RuntimeError(
-                f"{mujoco_proc.name} exited early (code {mujoco_proc.poll()}). "
-                f"See log: {mujoco_proc.log_path}"
-            )
-        log_text = _mujoco_log_text(log_path)
-        if "ElasticBand released" in log_text:
-            print("[ready] elastic band released")
-            return
-        if "ZMQKeyboardSubscriber" in log_text:
-            keyboard.send("k")
-        time.sleep(0.15)
-    raise RuntimeError(
-        f"Timed out waiting for elastic band release. See log: {log_path}"
+def _deploy_log_text(log_path: Path) -> str:
+    if not log_path.is_file():
+        return ""
+    return log_path.read_text(errors="replace")
+
+
+def _deploy_init_done(log_path: Path) -> bool:
+    return "Init Done" in _deploy_log_text(log_path)
+
+
+def _build_scene() -> None:
+    """Run build_rubberhand_suitcase_scene.py (sim2sim.md step 0)."""
+    venv_python = REPO_ROOT / ".venv_sim" / "bin" / "python"
+    python = str(venv_python) if venv_python.is_file() else sys.executable
+    script = REPO_ROOT / "gear_sonic/scripts/build_rubberhand_suitcase_scene.py"
+    print("[build] rubber-hand suitcase MuJoCo scene")
+    result = subprocess.run(
+        [python, str(script)],
+        cwd=str(REPO_ROOT),
+        env=_subprocess_env(),
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "build_rubberhand_suitcase_scene.py failed:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
+    for line in result.stdout.splitlines():
+        if line.strip():
+            print(f"  {line}")
 
 
 def main(config: Sim2SimRecordConfig) -> None:
+    model_path = Path(config.model_path).expanduser().resolve()
+    if not config.skip_policy_server and not model_path.is_dir():
+        raise FileNotFoundError(f"Checkpoint not found: {model_path}")
+    config.model_path = str(model_path)
+
     if not config.dataset_name:
         config.dataset_name = f"vla_sim2sim_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
@@ -448,7 +518,7 @@ def main(config: Sim2SimRecordConfig) -> None:
             f"cd {REPO_ROOT} && "
             f"source .venv_sim/bin/activate && "
             f"export MUJOCO_GL=egl && "
-            f"python gear_sonic/scripts/run_sim_loop.py "
+            f"python -u gear_sonic/scripts/run_sim_loop.py "
             f"--wbc-version nohand_suitcase --no-with-hands "
             f"--enable-offscreen --enable-image-publish --no-enable-onscreen "
             f"--ego-view-only "
@@ -474,7 +544,9 @@ def main(config: Sim2SimRecordConfig) -> None:
             f"--camera-host {config.camera_host} "
             f"--camera-port {config.camera_port} "
             f"--action-publish-rate {config.action_publish_rate} "
-            f"--action-horizon {config.action_horizon}"
+            f"--action-horizon {config.action_horizon} "
+            f"--inference-rate-hz 2.5 "
+            f"--async-timing-mode sim"
         )
 
         exporter_cmd = (
@@ -495,11 +567,6 @@ def main(config: Sim2SimRecordConfig) -> None:
         else:
             exporter_cmd += " --no-record-wrist-cameras"
 
-        processes.append(
-            _ProcGroup("data_exporter", exporter_cmd, log_dir / "data_exporter.log")
-        )
-        print("[start] Data exporter")
-
         if not config.skip_policy_server:
             _wait_until(
                 lambda: _policy_server_ready(config.policy_host, config.policy_port),
@@ -515,36 +582,15 @@ def main(config: Sim2SimRecordConfig) -> None:
                 processes=processes,
             )
 
-        # sim2sim.md: PolicyServer -> MuJoCo -> deploy. Release elastic band with k
-        # before deploy/VLA start (training scene + band diverges ~0.6s without k).
+        if not config.skip_scene_build:
+            _build_scene()
+
+        # sim2sim.md: PolicyServer -> MuJoCo (elastic band ON) -> deploy Init Done.
         mujoco_log = log_dir / "mujoco_sim.log"
+        deploy_log = log_dir / "cpp_deploy.log"
         mujoco_proc = _ProcGroup("mujoco_sim", sim_cmd, mujoco_log)
         processes.append(mujoco_proc)
         print("[start] MuJoCo sim")
-        print("[run] release elastic band (k) — sim only, VLA not started yet")
-        _release_elastic_band(keyboard, mujoco_proc, mujoco_log)
-
-        processes.append(
-            _ProcGroup(
-                "cpp_deploy",
-                deploy_cmd,
-                log_dir / "cpp_deploy.log",
-                cwd=REPO_ROOT / "gear_sonic_deploy",
-            )
-        )
-        print("[start] C++ deploy")
-
-        processes.append(
-            _ProcGroup("vla_inference", inference_cmd, log_dir / "vla_inference.log")
-        )
-        print("[start] VLA inference")
-
-        _wait_until(
-            lambda: _robot_config_ready(config.policy_host, 5557),
-            config.startup_timeout,
-            "C++ deploy robot_config ZMQ",
-            processes=processes,
-        )
 
         _wait_until(
             lambda: probes.camera_ready(config.camera_host, config.camera_port),
@@ -553,20 +599,100 @@ def main(config: Sim2SimRecordConfig) -> None:
             processes=processes,
         )
 
-        print("[run] control sequence: k -> i -> c -> p (record before policy)")
-        keyboard.send("k")
-        time.sleep(2.0)
-        keyboard.send("i")
-        time.sleep(2.0)
-        keyboard.send("c")
-        time.sleep(2.0)
-        keyboard.send("p")
-        time.sleep(2.0)
+        processes.append(
+            _ProcGroup(
+                "cpp_deploy",
+                deploy_cmd,
+                deploy_log,
+                cwd=REPO_ROOT / "gear_sonic_deploy",
+            )
+        )
+        print("[start] C++ deploy")
 
         _wait_until(
-            lambda: probes.proprio_ready(config.policy_host, 5557),
+            lambda: _deploy_init_done(deploy_log),
             config.startup_timeout,
-            "robot proprio state on ZMQ :5557 (after k/i/c/p)",
+            "C++ deploy Init Done (pose ramp on elastic band)",
+            processes=processes,
+        )
+
+        processes.append(
+            _ProcGroup("vla_inference", inference_cmd, log_dir / "vla_inference.log")
+        )
+        print("[start] VLA inference")
+
+        processes.append(
+            _ProcGroup("data_exporter", exporter_cmd, log_dir / "data_exporter.log")
+        )
+        print("[start] Data exporter")
+
+        vla_log = log_dir / "vla_inference.log"
+        exporter_log = log_dir / "data_exporter.log"
+
+        _wait_until(
+            lambda: _robot_config_ready(config.deploy_state_host, 5557),
+            config.startup_timeout,
+            "C++ deploy robot_config ZMQ",
+            processes=processes,
+        )
+
+        _wait_until(
+            lambda: _log_contains(vla_log, "Starting the policy loop"),
+            config.startup_timeout,
+            "VLA inference main loop",
+            processes=processes,
+        )
+        _wait_until(
+            lambda: _log_contains(exporter_log, "Recording to"),
+            config.startup_timeout,
+            "data exporter main loop",
+            processes=processes,
+        )
+
+        print(
+            "[run] control sequence (manual): k -> "
+            f"{config.key_after_k_seconds:.0f}s -> i -> "
+            f"{config.pose_stable_seconds:.0f}s -> c -> p"
+        )
+        print("[keyboard] sending 'k' (release elastic band + start C++ planner)")
+        keyboard.send("k")
+        _wait_until(
+            lambda: (
+                _log_contains(vla_log, "start control loop (planner mode)")
+                and _log_contains(mujoco_log, "ElasticBand released")
+            ),
+            timeout=60.0,
+            desc="k: C++ planner started and elastic band released",
+            poll=0.2,
+            processes=processes,
+            progress_interval=5.0,
+        )
+        print(f"[run] wait {config.key_after_k_seconds:.0f}s after k ...")
+        time.sleep(config.key_after_k_seconds)
+        _send_key_and_wait_log(
+            keyboard,
+            "i",
+            vla_log,
+            "Initial pose done.",
+            timeout=60.0,
+            processes=processes,
+        )
+        print(f"[run] wait {config.pose_stable_seconds:.0f}s after i ...")
+        time.sleep(config.pose_stable_seconds)
+        _send_key_and_wait_log(
+            keyboard,
+            "c",
+            exporter_log,
+            "Started recording",
+            timeout=60.0,
+            processes=processes,
+        )
+        _send_key_and_wait_log(
+            keyboard,
+            "p",
+            vla_log,
+            "Resumed policy loop",
+            timeout=60.0,
             processes=processes,
         )
 
@@ -614,4 +740,4 @@ def main(config: Sim2SimRecordConfig) -> None:
 
 
 if __name__ == "__main__":
-    tyro.cli(main)
+    main(tyro.cli(Sim2SimRecordConfig))

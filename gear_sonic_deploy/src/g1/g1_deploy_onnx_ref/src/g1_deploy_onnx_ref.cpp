@@ -2744,7 +2744,7 @@ class G1Deploy {
       MotorCommand motor_command_tmp;
       for (int i = 0; i < G1_NUM_MOTOR; ++i) {
         motor_command_tmp.tau_ff.at(i) = 0.0;
-        motor_command_tmp.q_target.at(i) = static_cast<float>(default_angles[i]);
+        motor_command_tmp.q_target.at(i) = static_cast<float>(render_initial_angles[i]);
         motor_command_tmp.dq_target.at(i) = 0.0;
         motor_command_tmp.kp.at(i) = kps[i];
         motor_command_tmp.kd.at(i) = kds[i];
@@ -2755,7 +2755,7 @@ class G1Deploy {
           double ratio = std::clamp(time_ / duration_, 0.0, 1.0);
           double current_pos = ls->motor_state()[i].q();
           motor_command_tmp.q_target.at(i) =
-              static_cast<float>(current_pos * (1.0 - ratio) + default_angles[i] * ratio);
+              static_cast<float>(current_pos * (1.0 - ratio) + render_initial_angles[i] * ratio);
         }
         if (use_sim_hands_) {
           sim_hands_.close(true);

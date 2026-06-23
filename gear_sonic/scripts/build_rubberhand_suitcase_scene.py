@@ -7,11 +7,12 @@ Exports g1_29dof.urdf via MuJoCo, then post-processes for sim2sim:
   - head_camera mounted on d435_link at URDF origin (no extra offset)
   - ImplicitActuator armature defaults from whole_body_tracking g1.py
   - actuator motors with training effort_limit_sim overrides
-  - rubber_hand mesh collision from URDF (no eef_box / rev_1_0 body)
+  - rubber_hand visual + collision from left/right_rubber_hand.STL (no eef_box)
 """
 
 from __future__ import annotations
 
+import argparse
 import fnmatch
 import re
 import shutil
@@ -190,19 +191,22 @@ SCENE_WRAPPER = """<mujoco model="g1_29dof_rubberhand_suitcase_sim">
   <statistic center="0 0 0.5" extent="2.0"/>
 
   <visual>
-    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
-    <rgba haze="0.15 0.25 0.35 1"/>
-    <global azimuth="120" elevation="-20"/>
+    <!-- Match Isaac Sim viewport: light-blue sky + blue checker ground with white grid. -->
+    <headlight diffuse="0 0 0" ambient="0.36 0.40 0.48" specular="0 0 0"/>
+    <rgba haze="0.72 0.80 0.95 1"/>
+    <global azimuth="-130" elevation="-20"/>
   </visual>
 
   <asset>
-    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
-    <material name="groundplane" rgba="0.03 0.07 0.16 1" reflectance="0.0"/>
+    <texture type="skybox" builtin="flat" rgb1="0.72 0.80 0.95" rgb2="0.72 0.80 0.95" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.95 0.95 0.95" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="8 8" reflectance="0.05"/>
   </asset>
 
   <worldbody>
-    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
-    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+    <light name="key_light" pos="1 0 3.5" dir="0 0 -1" directional="true" diffuse="1.0 0.95 0.86" ambient="0 0 0" specular="0 0 0"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" friction="1.0 0.005 0.0001"/>
     <camera name="global_view" pos="2.910 -5.040 3.860" xyaxes="0.866 0.500 0.000 -0.250 0.433 0.866"/>
   </worldbody>
 
@@ -466,8 +470,8 @@ def sync_training_meshes() -> None:
         shutil.copy2(src, OUT_MESHES / name)
 
 
-def _verify_built_model(robot_xml: Path) -> None:
-    model = mujoco.MjModel.from_xml_path(str(robot_xml))
+def _verify_built_model(scene_xml: Path) -> None:
+    model = mujoco.MjModel.from_xml_path(str(scene_xml))
     d435_body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "d435_link")
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "head_camera")
     if d435_body < 0 or camera_id < 0:
@@ -490,14 +494,30 @@ def _verify_built_model(robot_xml: Path) -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--regenerate-robot",
+        action="store_true",
+        help=(
+            "Re-export robot MJCF from training URDF. Default keeps the hand-crafted "
+            "rubber_hand STL visual/collision geoms in g1_29dof_inspire_nohand_rubberhand.xml."
+        ),
+    )
+    args = parser.parse_args()
+
     sync_training_meshes()
     G1_DESC_DIR.mkdir(parents=True, exist_ok=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    robot_xml = build_robot_xml()
-    ROBOT_XML.write_text(robot_xml)
+    if args.regenerate_robot:
+        ROBOT_XML.write_text(build_robot_xml())
+        print(f"Wrote robot MJCF from training URDF: {ROBOT_XML}")
+    elif not ROBOT_XML.is_file():
+        ROBOT_XML.write_text(build_robot_xml())
+        print(f"Wrote robot MJCF from training URDF: {ROBOT_XML}")
+    else:
+        print(f"Kept existing robot MJCF (rubber_hand STL mesh): {ROBOT_XML}")
     OUT_SCENE_XML.write_text(SCENE_WRAPPER)
-    _verify_built_model(ROBOT_XML)
-    print(f"Wrote robot MJCF from training URDF: {ROBOT_XML}")
+    _verify_built_model(OUT_SCENE_XML)
     print(f"Wrote scene: {OUT_SCENE_XML}")
     print(f"Training URDF: {TRAINING_URDF}")
     print(f"Meshes synced to: {OUT_MESHES}")

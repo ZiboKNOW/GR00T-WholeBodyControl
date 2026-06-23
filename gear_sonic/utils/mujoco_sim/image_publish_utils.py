@@ -47,6 +47,15 @@ class ImagePublishProcess:
         self.stop_event.clear()
         self.data_ready_event.clear()
 
+        # MuJoCo simulation time (seconds), written by the sim loop each image update.
+        self.sim_time_shm = shared_memory.SharedMemory(create=True, size=8)
+        self.shared_memory_info["__sim_time_s__"] = {
+            "name": self.sim_time_shm.name,
+            "size": 8,
+            "shape": (1,),
+            "dtype": np.float64,
+        }
+
         for camera_name, camera_config in camera_configs.items():
             height = camera_config["height"]
             width = camera_config["width"]
@@ -76,8 +85,16 @@ class ImagePublishProcess:
         )
         self.process.start()
 
-    def update_shared_memory(self, render_caches: Dict[str, np.ndarray]):
-        """Update shared memory with new rendered images"""
+    def update_shared_memory(
+        self,
+        render_caches: Dict[str, np.ndarray],
+        sim_time_s: float | None = None,
+    ):
+        """Update shared memory with new rendered images and optional MuJoCo sim time."""
+        if sim_time_s is not None:
+            sim_time_view = np.ndarray((1,), dtype=np.float64, buffer=self.sim_time_shm.buf)
+            sim_time_view[0] = float(sim_time_s)
+
         images_updated = 0
         for camera_name in self.camera_configs.keys():
             image_key = f"{camera_name}_image"
@@ -120,6 +137,13 @@ class ImagePublishProcess:
             except Exception as e:
                 print(f"Warning: Failed to cleanup shared memory for {camera_name}: {e}")
 
+        if hasattr(self, "sim_time_shm"):
+            try:
+                self.sim_time_shm.close()
+                self.sim_time_shm.unlink()
+            except Exception as e:
+                print(f"Warning: Failed to cleanup sim_time shared memory: {e}")
+
         self.shared_memory_blocks.clear()
 
     @staticmethod
@@ -148,6 +172,15 @@ class ImagePublishProcess:
 
             loop_count = 0
             last_data_time = time.time()
+            sim_time_array = None
+            sim_time_info = shared_memory_info.get("__sim_time_s__")
+            if sim_time_info is not None:
+                sim_time_shm = shared_memory.SharedMemory(name=sim_time_info["name"])
+                sim_time_array = np.ndarray(
+                    sim_time_info["shape"],
+                    dtype=sim_time_info["dtype"],
+                    buffer=sim_time_shm.buf,
+                )
 
             while not stop_event.is_set():
                 loop_count += 1
@@ -156,6 +189,7 @@ class ImagePublishProcess:
                 data_available = data_ready_event.wait(timeout=timeout)
 
                 current_time = time.time()
+                sim_time_s = float(sim_time_array[0]) if sim_time_array is not None else current_time
 
                 if data_available:
                     data_ready_event.clear()
@@ -170,7 +204,8 @@ class ImagePublishProcess:
 
                         message_dict = {
                             "images": image_copies,
-                            "timestamps": {name: current_time for name in image_copies.keys()},
+                            "timestamps": {name: sim_time_s for name in image_copies.keys()},
+                            "sim_time_s": sim_time_s,
                         }
 
                         image_msg = ImageMessageSchema(
@@ -195,6 +230,8 @@ class ImagePublishProcess:
             print("Image publisher interrupted by user")
         finally:
             try:
+                if "sim_time_shm" in locals() and sim_time_shm is not None:
+                    sim_time_shm.close()
                 for shm in shm_blocks.values():
                     shm.close()
                 if sensor_server is not None:

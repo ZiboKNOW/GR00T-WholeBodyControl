@@ -105,8 +105,13 @@ class DefaultEnv:
         self.last_reward = 0
 
         self.offscreen = offscreen
-        if self.offscreen:
-            self.init_renderers()
+        # Renderers are created lazily on the render thread so the EGL/GL context
+        # is bound to the thread that actually renders. This keeps the heavy GPU
+        # render off the physics-stepping thread, letting physics track wall time.
+        self.renderers = {}
+        self._render_lock = Lock()
+        self._render_data = None
+        self._last_fall_warn_t = 0.0
         self.image_dt = self.config.get("IMAGE_DT", 0.033333)
         self.image_publish_process = None
 
@@ -634,13 +639,16 @@ class DefaultEnv:
             self.mj_data.ctrl = np.concatenate((np.zeros(6), self.torques))
         else:
             self.mj_data.ctrl = self.torques
-        mujoco.mj_step(self.mj_model, self.mj_data)
-        if self.passive_hand_mimic_actuators:
-            self._apply_passive_hand_joint_mimic()
-        if self.num_hand_dof > 0 or self.passive_hand_mimic_actuators:
-            mujoco.mj_forward(self.mj_model, self.mj_data)
+        # Hold the render lock only around state mutation so the render thread
+        # snapshots a consistent (non mid-integration) mj_data.
+        with self._render_lock:
+            mujoco.mj_step(self.mj_model, self.mj_data)
+            if self.passive_hand_mimic_actuators:
+                self._apply_passive_hand_joint_mimic()
+            if self.num_hand_dof > 0 or self.passive_hand_mimic_actuators:
+                mujoco.mj_forward(self.mj_model, self.mj_data)
 
-        self.check_fall()
+            self.check_fall()
 
     def apply_perturbation(self, key):
         perturbation_x_body = 0.0
@@ -688,22 +696,47 @@ class DefaultEnv:
     def get_privileged_obs(self):
         return {}
 
-    def update_render_caches(self):
+    def update_render_caches(self, data=None, sim_time_s=None):
+        if not self.renderers:
+            return {}
+        data = self.mj_data if data is None else data
+        if sim_time_s is None:
+            sim_time_s = float(data.time)
         render_caches = {}
         for camera_name, camera_config in self.camera_configs.items():
             renderer = self.renderers[camera_name]
             if "params" in camera_config:
-                renderer.update_scene(self.mj_data, camera=camera_config["params"])
+                renderer.update_scene(data, camera=camera_config["params"])
             elif "mjcf_name" in camera_config:
-                renderer.update_scene(self.mj_data, camera=camera_config["mjcf_name"])
+                renderer.update_scene(data, camera=camera_config["mjcf_name"])
             else:
-                renderer.update_scene(self.mj_data, camera=camera_name)
+                renderer.update_scene(data, camera=camera_name)
             render_caches[camera_name + "_image"] = renderer.render()
 
         if self.image_publish_process is not None:
-            self.image_publish_process.update_shared_memory(render_caches)
+            self.image_publish_process.update_shared_memory(
+                render_caches,
+                sim_time_s=float(sim_time_s),
+            )
 
         return render_caches
+
+    def render_from_snapshot(self):
+        """Render all cameras from a locked snapshot of mj_data.
+
+        Runs on a dedicated render thread; copies the live mj_data under the
+        render lock (cheap) then renders/encodes outside the lock, so heavy GPU
+        work never blocks physics stepping. The snapshot carries the real
+        ``mj_data.time`` so downstream (VLA) uses true sim time as its clock.
+        """
+        if not self.renderers:
+            return None
+        if self._render_data is None:
+            self._render_data = mujoco.MjData(self.mj_model)
+        with self._render_lock:
+            mujoco.mj_copyData(self._render_data, self.mj_model, self.mj_data)
+            sim_time_s = float(self.mj_data.time)
+        return self.update_render_caches(self._render_data, sim_time_s=sim_time_s)
 
     def handle_keyboard_button(self, key):
         if self.elastic_band:
@@ -734,7 +767,12 @@ class DefaultEnv:
         self.fall = False
         if self.mj_data.qpos[2] < 0.2:
             self.fall = True
-            print(f"Warning: Robot has fallen, height: {self.mj_data.qpos[2]:.3f} m")
+            # Throttle to ~1 Hz: printing every 200 Hz physics step floods logs
+            # and adds blocking I/O on the physics thread.
+            now = time.monotonic()
+            if now - self._last_fall_warn_t > 1.0:
+                print(f"Warning: Robot has fallen, height: {self.mj_data.qpos[2]:.3f} m")
+                self._last_fall_warn_t = now
 
         if self.fall:
             # Match git sim2sim: deploy InitControl ramps pose while elastic band holds.
@@ -823,6 +861,7 @@ class BaseSimulator:
                 print(f"Warning: ElasticBand keyboard subscriber disabled: {e}")
 
         self.sim_thread = None
+        self._render_thread = None
 
     def start_as_thread(self):
         self.sim_thread = Thread(target=self.start)
@@ -851,20 +890,63 @@ class BaseSimulator:
         if key == "k":
             self.sim_env.release_elastic_band()
 
+    def _render_loop(self):
+        """Offscreen render thread: renders cameras at IMAGE_DT off the physics thread."""
+        if self.sim_env.offscreen and not self.sim_env.renderers:
+            # Create renderers here so the EGL/GL context is owned by this thread.
+            self.sim_env.init_renderers()
+        period = self.image_dt
+        while self._running:
+            loop_start = time.monotonic()
+            try:
+                self.sim_env.render_from_snapshot()
+            except Exception as e:
+                print(f"Render thread error: {e}")
+            sleep_time = period - (time.monotonic() - loop_start)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
     def start(self):
         """Main simulation loop"""
         sim_cnt = 0
         ts = time.time()
+
+        # Fresh RTF log per run.
+        try:
+            with open("/home/ubuntu/DATA4/zzb/sim_rtf.log", "w") as f:
+                f.write("")
+        except Exception:
+            pass
+
+        # Render off the physics thread: a heavy GPU render must never stall
+        # stepping, otherwise sim time silently lags the wall-clock C++ control
+        # stack (reference motion / PD targets advance faster than physics).
+        if self.sim_env.offscreen:
+            self._render_thread = Thread(target=self._render_loop, daemon=True)
+            self._render_thread.start()
+
+        # Wall-anchored real-time pacer: keep mj_data.time aligned to wall time.
+        wall_anchor = time.monotonic()
+        last_sim_time = 0.0
+        rtf_wall_ref = wall_anchor
+        rtf_sim_ref = 0.0
 
         try:
             while self._running and (
                 (self.sim_env.viewer and self.sim_env.viewer.is_running())
                 or (self.sim_env.viewer is None)
             ):
-                step_start = time.monotonic()
-
                 self.poll_keyboard_commands()
                 self.sim_env.sim_step()
+
+                sim_time = float(self.sim_env.mj_data.time)
+                # Re-anchor when the sim is reset (time jumps backwards).
+                if sim_time < last_sim_time - 1e-9:
+                    wall_anchor = time.monotonic() - sim_time
+                    rtf_wall_ref = time.monotonic()
+                    rtf_sim_ref = sim_time
+                last_sim_time = sim_time
+
                 now = time.time()
                 if now - ts > 1 / 10.0 and self.redis_client is not None:
                     head_pose = self.sim_env.get_head_pose()
@@ -878,14 +960,34 @@ class BaseSimulator:
                 if sim_cnt % int(self.reward_dt / self.sim_dt) == 0:
                     self.sim_env.update_reward()
 
-                if sim_cnt % int(self.image_dt / self.sim_dt) == 0:
-                    self.sim_env.update_render_caches()
-
-                # Simple rate limiter (replaces ROS rate)
-                elapsed = time.monotonic() - step_start
-                sleep_time = self.sim_dt - elapsed
+                # Pace to real time: align sim time to wall time. If behind, run
+                # flat out (no sleep) to catch up; never let sim outrun wall.
+                sleep_time = (wall_anchor + sim_time) - time.monotonic()
                 if sleep_time > 0:
                     time.sleep(sleep_time)
+
+                # Real-time-factor (sim seconds advanced per wall second, target 1.0).
+                # Sampled every ~1 s of sim and mirrored to a file so it is readable
+                # even if other logs flood the terminal ring buffer.
+                if sim_cnt > 0 and sim_cnt % 200 == 0:
+                    wall_elapsed = time.monotonic() - rtf_wall_ref
+                    sim_elapsed = sim_time - rtf_sim_ref
+                    rtf = sim_elapsed / wall_elapsed if wall_elapsed > 1e-6 else 0.0
+                    height = float(self.sim_env.mj_data.qpos[2])
+                    fallen = getattr(self.sim_env, "fall", False)
+                    line = (
+                        f"RTF={rtf:.3f} sim_time={sim_time:.2f}s "
+                        f"height={height:.3f}m fallen={fallen}"
+                    )
+                    try:
+                        with open("/home/ubuntu/DATA4/zzb/sim_rtf.log", "a") as f:
+                            f.write(f"{time.time():.2f} {line}\n")
+                    except Exception:
+                        pass
+                    if sim_cnt % 1000 == 0:
+                        print(f"[sim] {line} (target RTF 1.000)")
+                    rtf_wall_ref = time.monotonic()
+                    rtf_sim_ref = sim_time
 
                 sim_cnt += 1
         except KeyboardInterrupt:
@@ -902,6 +1004,9 @@ class BaseSimulator:
     def close(self):
         self._running = False
         try:
+            if self._render_thread is not None and self._render_thread.is_alive():
+                self._render_thread.join(timeout=2.0)
+                self._render_thread = None
             if self.keyboard_listener is not None:
                 self.keyboard_listener.close()
                 self.keyboard_listener = None

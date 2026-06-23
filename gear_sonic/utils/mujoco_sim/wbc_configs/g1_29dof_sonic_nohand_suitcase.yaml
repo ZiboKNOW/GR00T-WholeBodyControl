@@ -1,5 +1,5 @@
 # 29-DOF G1 rubber-hand (unitree_ros g1_29dof) + HDMI suitcase for unitree_g1_sonic_no_hand sim2sim
-# Visual: rubber_hand geoms + eef_box wrist contacts (matches train_move_suitcase_sonic).
+# Visual/collision: left/right_rubber_hand.STL mesh geoms (matches train_move_suitcase_sonic).
 # Control: 29 body DOFs only — no Inspire hand motors/joints (NUM_HAND_* = 0).
 ROBOT_TYPE: 'g1_29dof' # Robot name, "go2", "b2", "b2w", "h1", "go2w", "g1" 
 #ROBOT_SCENE: "gear_sonic/data/robot_model/model_data/g1/scene_43dof.xml" # Robot scene, for Sim2Sim
@@ -160,67 +160,67 @@ RIGHT_HAND_JOINT_PREFIX: "R_"
 NUM_UPPER_BODY_JOINTS: 17
 
 DEFAULT_DOF_ANGLES: [
-    -0.1,  # left_hip_pitch_joint 
-    0.0,  # left_hip_roll_joint
-    0.0,  # left_hip_yaw_joint
-    0.3,  # left_knee_joint
-    -0.2, # left_ankle_pitch_joint
-    0.0,  # left_ankle_roll_joint
-    -0.1, # right_hip_pitch_joint
-    0.0,  # right_hip_roll_joint
-    0.0,  # right_hip_yaw_joint
-    0.3,  # right_knee_joint
-    -0.2, # right_ankle_pitch_joint
-    0.0,  # right_ankle_roll_joint
-    0.0,  # waist_yaw_joint
-    0.0,  # waist_roll_joint
-    0.0,  # waist_pitch_joint
-    0.0,  # left_shoulder_pitch_joint
-    0.0,  # left_shoulder_roll_joint
-    0.0,  # left_shoulder_yaw_joint
-    0.0,  # left_elbow_joint
-    0.0,  # left_wrist_roll_joint
-    0.0,  # left_wrist_pitch_joint
-    -0.4,  # left_wrist_yaw_joint (move_suitcase_sonic training init)
-    0.0,  # right_shoulder_pitch_joint
-    0.0,  # right_shoulder_roll_joint
-    0.0,  # right_shoulder_yaw_joint
-    0.0,  # right_elbow_joint
-    0.0,  # right_wrist_roll_joint
-    0.0,  # right_wrist_pitch_joint
-    0.4   # right_wrist_yaw_joint (move_suitcase_sonic training init)
+    0.010813378,  # left_hip_pitch_joint (render_vla robot_init_override mean)
+    0.054540655,  # left_hip_roll_joint
+    0.157083030,  # left_hip_yaw_joint
+    0.167522588,  # left_knee_joint
+    -0.185456461, # left_ankle_pitch_joint
+    -0.017950305, # left_ankle_roll_joint
+    -0.022480281, # right_hip_pitch_joint
+    -0.061992713, # right_hip_roll_joint
+    -0.337160599, # right_hip_yaw_joint
+    0.150213782,  # right_knee_joint
+    -0.123269817, # right_ankle_pitch_joint
+    0.012839354,  # right_ankle_roll_joint
+    0.014520989,  # waist_yaw_joint
+    0.012667317,  # waist_roll_joint
+    0.006314464,  # waist_pitch_joint
+    -0.010541708, # left_shoulder_pitch_joint
+    0.263436083,  # left_shoulder_roll_joint
+    -0.588493052, # left_shoulder_yaw_joint
+    1.082595167,  # left_elbow_joint
+    -0.112560694, # left_wrist_roll_joint
+    -0.073528038, # left_wrist_pitch_joint
+    0.041388909,  # left_wrist_yaw_joint
+    0.002190481,  # right_shoulder_pitch_joint
+    -0.261137060, # right_shoulder_roll_joint
+    0.642738029,  # right_shoulder_yaw_joint
+    1.118693750,  # right_elbow_joint
+    0.176724517,  # right_wrist_roll_joint
+    -0.077460403, # right_wrist_pitch_joint
+    -0.250930187  # right_wrist_yaw_joint
 ]
 
 DEFAULT_MOTOR_ANGLES: [
-    -0.1,  # left_hip_pitch_joint 
-    0.0,  # left_hip_roll_joint
-    0.0,  # left_hip_yaw_joint
-    0.3,  # left_knee_joint
-    -0.2, # left_ankle_pitch_joint
-    0.0,  # left_ankle_roll_joint
-    -0.1, # right_hip_pitch_joint
-    0.0,  # right_hip_roll_joint
-    0.0,  # right_hip_yaw_joint
-    0.3,  # right_knee_joint
-    -0.2, # right_ankle_pitch_joint
-    0.0,  # right_ankle_roll_joint
-    0.0,  # waist_yaw_joint
-    0.0,  # waist_roll_joint
-    0.0,  # waist_pitch_joint
-    0.0,  # left_shoulder_pitch_joint
-    0.0,  # left_shoulder_roll_joint
-    0.0,  # left_shoulder_yaw_joint
-    0.0,  # left_elbow_joint
-    0.0,  # left_wrist_roll_joint
-    0.0,  # left_wrist_pitch_joint
-    -0.4,  # left_wrist_yaw_joint
-    0.0,  # right_shoulder_pitch_joint
-    0.0,  # right_shoulder_roll_joint
-    0.0,  # right_shoulder_yaw_joint
-    0.0,  # right_elbow_joint
-    0.0,  # right_wrist_roll_joint
-    0.0,  # right_wrist_pitch_joint
-    0.4   # right_wrist_yaw_joint
+    0.010813378,  # left_hip_pitch_joint (matches DEFAULT_DOF_ANGLES)
+    0.054540655,  # left_hip_roll_joint
+    0.157083030,  # left_hip_yaw_joint
+    0.167522588,  # left_knee_joint
+    -0.185456461, # left_ankle_pitch_joint
+    -0.017950305, # left_ankle_roll_joint
+    -0.022480281, # right_hip_pitch_joint
+    -0.061992713, # right_hip_roll_joint
+    -0.337160599, # right_hip_yaw_joint
+    0.150213782,  # right_knee_joint
+    -0.123269817, # right_ankle_pitch_joint
+    0.012839354,  # right_ankle_roll_joint
+    0.014520989,  # waist_yaw_joint
+    0.012667317,  # waist_roll_joint
+    0.006314464,  # waist_pitch_joint
+    -0.010541708, # left_shoulder_pitch_joint
+    0.263436083,  # left_shoulder_roll_joint
+    -0.588493052, # left_shoulder_yaw_joint
+    1.082595167,  # left_elbow_joint
+    -0.112560694, # left_wrist_roll_joint
+    -0.073528038, # left_wrist_pitch_joint
+    0.041388909,  # left_wrist_yaw_joint
+    0.002190481,  # right_shoulder_pitch_joint
+    -0.261137060, # right_shoulder_roll_joint
+    0.642738029,  # right_shoulder_yaw_joint
+    1.118693750,  # right_elbow_joint
+    0.176724517,  # right_wrist_roll_joint
+    -0.077460403, # right_wrist_pitch_joint
+    -0.250930187  # right_wrist_yaw_joint
 ]
 
 motor_pos_lower_limit_list: [-2.5307, -0.5236, -2.7576, -0.087267, -0.87267, -0.2618, 

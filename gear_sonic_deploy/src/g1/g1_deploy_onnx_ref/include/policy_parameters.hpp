@@ -229,14 +229,50 @@ const std::array<double, 29> default_angles = {
     0.6, // left_elbow_joint
     0.0, // left_wrist_roll_joint
     0.0, // left_wrist_pitch_joint
-    -0.4, // left_wrist_yaw_joint (move_suitcase_sonic training init)
+    0.0, // left_wrist_yaw_joint
     0.2, // right_shoulder_pitch_joint
     -0.2, // right_shoulder_roll_joint
     0.0, // right_shoulder_yaw_joint
     0.6, // right_elbow_joint
     0.0, // right_wrist_roll_joint
     0.0, // right_wrist_pitch_joint
-    0.4 // right_wrist_yaw_joint (move_suitcase_sonic training init)
+    0.0 // right_wrist_yaw_joint
+};
+
+// Render-aligned reset pose from HDMI render_vla robot_init_override:
+// /home/ubuntu/DATA4/zzb/HDMI/data/motion/initial_pose/analysis/non_hand_state_29dof.npz
+// Uses the mean over 498 near-identical initial frames. This is only for
+// InitControl ramping; default_angles remains the low-level policy baseline.
+const std::array<double, 29> render_initial_angles = {
+    0.010813378, // left_hip_pitch_joint
+    0.054540655, // left_hip_roll_joint
+    0.157083030, // left_hip_yaw_joint
+    0.167522588, // left_knee_joint
+    -0.185456461, // left_ankle_pitch_joint
+    -0.017950305, // left_ankle_roll_joint
+    -0.022480281, // right_hip_pitch_joint
+    -0.061992713, // right_hip_roll_joint
+    -0.337160599, // right_hip_yaw_joint
+    0.150213782, // right_knee_joint
+    -0.123269817, // right_ankle_pitch_joint
+    0.012839354, // right_ankle_roll_joint
+    0.014520989, // waist_yaw_joint
+    0.012667317, // waist_roll_joint
+    0.006314464, // waist_pitch_joint
+    -0.010541708, // left_shoulder_pitch_joint
+    0.263436083, // left_shoulder_roll_joint
+    -0.588493052, // left_shoulder_yaw_joint
+    1.082595167, // left_elbow_joint
+    -0.112560694, // left_wrist_roll_joint
+    -0.073528038, // left_wrist_pitch_joint
+    0.041388909, // left_wrist_yaw_joint
+    0.002190481, // right_shoulder_pitch_joint
+    -0.261137060, // right_shoulder_roll_joint
+    0.642738029, // right_shoulder_yaw_joint
+    1.118693750, // right_elbow_joint
+    0.176724517, // right_wrist_roll_joint
+    -0.077460403, // right_wrist_pitch_joint
+    -0.250930187 // right_wrist_yaw_joint
 };
 
 #endif // POLICY_PARAMETERS_HPP
