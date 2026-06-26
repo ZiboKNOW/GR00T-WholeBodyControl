@@ -813,6 +813,8 @@ def main(config: InferenceConfig):
                         if hand_value.ndim == 2:
                             hand_actions[hand_key] = hand_value[current_idx]
 
+                    # DEBUG: force published motion token to zero.
+                    # motion_token = np.zeros_like(motion_token, dtype=np.float32)                
                     frame_index = np.array([zmq_frame_counter], dtype=np.int64)
                     zmq_frame_counter += 1
 

@@ -23,7 +23,6 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 import json
-from pathlib import Path
 import time
 
 import numpy as np
@@ -46,10 +45,7 @@ from gear_sonic.utils.data_collection.episode_state import EpisodeState
 from gear_sonic.utils.data_collection.keyboard_subscriber import ZMQKeyboardSubscriber
 from gear_sonic.utils.data_collection.telemetry import Telemetry
 from gear_sonic.utils.data_collection.text_to_speech import TextToSpeech
-from gear_sonic.utils.data_collection.transforms import (
-    compute_projected_gravity,
-    quat_to_rot6d,
-)
+from gear_sonic.utils.data_collection.transforms import compute_projected_gravity, quat_to_rot6d
 from gear_sonic.utils.data_collection.zmq_state_subscriber import (
     ZMQStateSubscriber,
     poll_robot_config_zmq,
@@ -58,10 +54,6 @@ from gear_sonic.utils.data_collection.zmq_state_subscriber import (
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-
-_DEFAULT_ROOT_OUTPUT_DIR = str(
-    Path(__file__).resolve().parents[3] / "outputs" / "vla_sim_videos"
-)
 
 
 @dataclass
@@ -75,8 +67,8 @@ class SonicDataExporterConfig:
     task_prompt: str = "demo"
     """Language task prompt."""
 
-    root_output_dir: str = _DEFAULT_ROOT_OUTPUT_DIR
-    """Root output directory (default: <workspace>/outputs/vla_sim_videos)."""
+    root_output_dir: str = "outputs"
+    """Root output directory."""
 
     data_collection_frequency: int = 50
     """Data collection frequency (Hz)."""
@@ -246,7 +238,6 @@ class GrootDataCollector:
         self.loop_period = 1.0 / frequency
         self.data_exporter = data_exporter
         self.robot_model = robot_model
-        self._hand_dof = len(robot_model.supplemental_info.left_hand_actuated_joints)
 
         self._episode_state = EpisodeState()
         self._keyboard_listener = ZMQKeyboardSubscriber()
@@ -330,11 +321,7 @@ class GrootDataCollector:
             key = "c"
             self._manager_toggle_dc = False
 
-        if key == "s":
-            if self._episode_state.get_state() == self._episode_state.RECORDING:
-                self._episode_state.change_state()
-                self._print_and_say("Stopping recording, preparing to save", blocking=False)
-        elif key == "c":
+        if key == "c":
             self._episode_state.change_state()
             if self._episode_state.get_state() == self._episode_state.RECORDING:
                 self._initial_yaw = None
@@ -510,28 +497,14 @@ class GrootDataCollector:
             if self._sonic_error_count == 1 or self._sonic_error_count % 100 == 0:
                 print(f"[Sonic] Error processing pose message: {e}")
 
-    def _extract_hand_joints(self, pose_data: dict, key: str) -> np.ndarray:
+    @staticmethod
+    def _extract_hand_joints(pose_data: dict, key: str) -> np.ndarray:
         arr = pose_data.get(key)
         if arr is not None:
             if arr.ndim > 1:
                 arr = arr[0]
             return arr.astype(np.float32)
-        return np.zeros(self._hand_dof, dtype=np.float32)
-
-    def _extract_proprio_hand_joints(self, proprio: dict, key: str) -> np.ndarray:
-        arr = proprio.get(key)
-        if arr is None:
-            return np.zeros(self._hand_dof, dtype=np.float32)
-
-        arr = np.asarray(arr, dtype=np.float32).reshape(-1)
-        if arr.size == self._hand_dof:
-            return arr
-
-        out = np.zeros(self._hand_dof, dtype=np.float32)
-        n = min(self._hand_dof, arr.size)
-        if n > 0:
-            out[:n] = arr[:n]
-        return out
+        return np.zeros(7, dtype=np.float32)
 
     @staticmethod
     def _extract_bool(pose_data: dict, key: str) -> bool:
@@ -608,24 +581,15 @@ class GrootDataCollector:
         assert self.latest_proprio_msg is not None
         proprio = self.latest_proprio_msg
 
-        left_hand_q = self._extract_proprio_hand_joints(proprio, "left_hand_q")
-        right_hand_q = self._extract_proprio_hand_joints(proprio, "right_hand_q")
-        last_left_hand_action = self._extract_proprio_hand_joints(
-            proprio, "last_left_hand_action"
-        )
-        last_right_hand_action = self._extract_proprio_hand_joints(
-            proprio, "last_right_hand_action"
-        )
-
         whole_q = self.robot_model.get_configuration_from_actuated_joints(
             body_actuated_joint_values=proprio["body_q"],
-            left_hand_actuated_joint_values=left_hand_q,
-            right_hand_actuated_joint_values=right_hand_q,
+            left_hand_actuated_joint_values=proprio["left_hand_q"],
+            right_hand_actuated_joint_values=proprio["right_hand_q"],
         )
         whole_action_wbc = self.robot_model.get_configuration_from_actuated_joints(
             body_actuated_joint_values=proprio["last_action"],
-            left_hand_actuated_joint_values=last_left_hand_action,
-            right_hand_actuated_joint_values=last_right_hand_action,
+            left_hand_actuated_joint_values=proprio["last_left_hand_action"],
+            right_hand_actuated_joint_values=proprio["last_right_hand_action"],
         )
 
         self.robot_model.cache_forward_kinematics(whole_q)
@@ -798,13 +762,13 @@ class GrootDataCollector:
             hand_msg["left_hand_joints"].astype(np.float32)
             if hand_msg is not None
             and hand_msg.get("left_hand_joints") is not None
-            else np.zeros(self._hand_dof, dtype=np.float32)
+            else np.zeros(7, dtype=np.float32)
         )
         frame_data["teleop.right_hand_joints"] = (
             hand_msg["right_hand_joints"].astype(np.float32)
             if hand_msg is not None
             and hand_msg.get("right_hand_joints") is not None
-            else np.zeros(self._hand_dof, dtype=np.float32)
+            else np.zeros(7, dtype=np.float32)
         )
 
         # Planner command fields
@@ -964,8 +928,6 @@ def main(config: SonicDataExporterConfig):
                 modality_config[key].update(value)
             else:
                 modality_config[key] = value
-    else:
-        print("[Camera] Wrist cameras disabled — recording ego_view (+ global_view if sim publishes it)")
 
     if config.record_global_view:
         print("[Camera] Global overview camera enabled — adding to dataset schema")
