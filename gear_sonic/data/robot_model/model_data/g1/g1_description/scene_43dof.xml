@@ -1,5 +1,5 @@
 <mujoco model="g1_43dof scene">
-  <include file="g1_29dof_with_hand.xml"/>
+  <include file="g1_29dof_inspire_nohand_rubberhand.xml"/>
   <!-- Shelf pose from walk_with_shelf_004/motion.npz frame 0 (relative to pelvis). -->
   <include file="objects/shelf/shelf_scene.xml"/>
   <!-- Note that the hand model in g1_29dof_with_hand.xml is not stable for simulation. -->

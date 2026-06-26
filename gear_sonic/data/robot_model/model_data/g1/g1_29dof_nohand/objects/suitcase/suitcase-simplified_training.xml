@@ -3,7 +3,8 @@
   <!-- Init pose: omomo sub1_suitcase_011 frame 0 in pelvis-yaw frame (robot at origin, pelvis z=0.793).
        freejoint at the suitcase link origin; geom offset places the 0.2 x 0.3 x 0.4 m box upright
        with its 20 x 30 cm face on the floor (z=0).
-       NOTE: spawn pose is set in base_sim._apply_spawn_pose; keep XML default in sync. -->
+       NOTE: spawn pose is set in base_sim._apply_spawn_pose; keep XML default in sync.
+       Orientation is identity in pelvis-yaw frame (30x40 face toward robot). -->
   <worldbody>
     <body name="suitcase" pos="0.532087 -0.003498 0">
       <freejoint name="suitcase_root"/>

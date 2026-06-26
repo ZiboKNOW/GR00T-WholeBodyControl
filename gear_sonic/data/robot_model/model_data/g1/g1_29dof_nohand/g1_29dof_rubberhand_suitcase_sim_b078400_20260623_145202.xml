@@ -1,13 +1,11 @@
 <mujoco model="g1_29dof_rubberhand_suitcase_sim">
-  <!-- <include file="../g1_description/g1_29dof_inspire_nohand_rubberhand.xml"/> -->
-  <include file="../g1_29dof_with_rubberhand_copy.xml"/>
+  <include file="../g1_description/g1_29dof_inspire_nohand_rubberhand.xml"/>
   <include file="objects/suitcase/suitcase-simplified_training.xml"/>
 
   <statistic center="0 0 0.5" extent="2.0"/>
 
   <visual>
     <!-- Match Isaac Sim viewport: light-blue sky + blue checker ground with white grid. -->
-    <quality offsamples="0"/>
     <headlight diffuse="0 0 0" ambient="0.36 0.40 0.48" specular="0 0 0"/>
     <rgba haze="0.72 0.80 0.95 1"/>
     <global azimuth="-130" elevation="-20"/>

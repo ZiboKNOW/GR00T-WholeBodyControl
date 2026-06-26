@@ -31,7 +31,8 @@ GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 # robot stands at the origin facing +x (pelvis z=0.793). Geom offset (-0.1,0,0.2) keeps
 # the 0.2x0.3x0.4 m box upright with its 20x30 cm face on the floor.
 SUITCASE_OFFSET_PELVIS_YAW = np.array([0.532087, -0.003498, 0.0])
-SUITCASE_SPAWN_QUAT = np.array([1.0, 0.0, 0.0, 0.0])
+# Identity in pelvis-yaw frame: 30x40 cm face toward the robot, 20x30 cm face on the floor.
+SUITCASE_QUAT_PELVIS_YAW = np.array([1.0, 0.0, 0.0, 0.0])
 INSPIRE_PASSIVE_HAND_MIMIC = {
     "thumb_intermediate": (1, 1.6),
     "thumb_distal": (1, 2.4),
@@ -336,7 +337,11 @@ class DefaultEnv:
         )
         world_pos = pelvis_pos + offset_xy
         world_pos[2] = 0.0
-        return world_pos, SUITCASE_SPAWN_QUAT.copy()
+        yaw = np.arctan2(pelvis_mat[1, 0], pelvis_mat[0, 0])
+        r_world = Rotation.from_euler("z", yaw) * _rotation_from_mujoco_quat(SUITCASE_QUAT_PELVIS_YAW)
+        quat_xyzw = r_world.as_quat()
+        world_quat = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]], dtype=np.float64)
+        return world_pos, world_quat
 
     def _apply_spawn_pose(self, reset_object: bool = True):
         """Apply training-aligned default joint poses; optionally reset suitcase spawn."""
