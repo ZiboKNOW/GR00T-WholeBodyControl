@@ -58,6 +58,13 @@ INSPIRE_OPEN_HAND = np.array([-0.1, -0.1, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
 INSPIRE_CLOSED_HAND = np.array([1.3, 0.6, 1.7, 1.7, 1.7, 1.7], dtype=np.float32)
 
 DEFAULT_EMBODIMENT_TAG = "unitree_g1_sonic_no_hand_wo_wrist"
+DEFAULT_MOTION_TOKEN_REPLAY_PATH = (
+    "/home/ubuntu/DATA4/zzb/HDMI/groot_data/move_suitcase_0628/data/chunk-000/"
+    "episode_000000.parquet"
+)
+MOTION_TOKEN_MODE_VLA = "vla"
+MOTION_TOKEN_MODE_PARQUET_REPLAY = "parquet_replay"
+MOTION_TOKEN_DIM = 64
 
 SONIC_BODY_STATE_SLICES = {
     "left_leg": slice(0, 6),
@@ -225,6 +232,13 @@ class InferenceConfig:
     prompt: str = "demo"
     """The language prompt for the VLA policy."""
 
+    # Motion token source
+    motion_token_mode: str = MOTION_TOKEN_MODE_VLA
+    """Motion token source: 'vla' or 'parquet_replay'."""
+
+    motion_token_replay_path: str = DEFAULT_MOTION_TOKEN_REPLAY_PATH
+    """Parquet file to replay action.motion_token from in parquet_replay mode."""
+
     # Debug
     verbose_timing: bool = False
     """Whether to always print timing info (not just when loop is slow)."""
@@ -299,6 +313,24 @@ def get_action_field(action_dict: dict, key: str):
         f"Required action field '{key}' (or 'action.{key}') not found in processed_action. "
         f"Available keys: {list(action_dict.keys())}"
     )
+
+
+def _load_replay_motion_tokens(path: str) -> np.ndarray:
+    import pandas as pd
+
+    df = pd.read_parquet(path)
+    key = "action.motion_token"
+    if key not in df.columns:
+        raise KeyError(
+            f"Replay parquet must contain column '{key}'. Available columns: {list(df.columns)}"
+        )
+
+    tokens = np.stack(df[key].to_numpy()).astype(np.float32)
+    if tokens.ndim != 2 or tokens.shape[-1] != MOTION_TOKEN_DIM:
+        raise ValueError(
+            f"Replay motion tokens must have shape [N, {MOTION_TOKEN_DIM}], got {tokens.shape}"
+        )
+    return tokens
 
 
 # ---------------------------------------------------------------------------
@@ -500,6 +532,26 @@ def _inference_worker_loop(
 def main(config: InferenceConfig):
     pause_loop = True
 
+    motion_token_mode = config.motion_token_mode.strip().lower()
+    valid_motion_token_modes = {
+        MOTION_TOKEN_MODE_VLA,
+        MOTION_TOKEN_MODE_PARQUET_REPLAY,
+    }
+    if motion_token_mode not in valid_motion_token_modes:
+        raise ValueError(
+            f"motion_token_mode must be one of {sorted(valid_motion_token_modes)}, "
+            f"got {config.motion_token_mode!r}"
+        )
+
+    replay_motion_tokens = None
+    replay_token_index = 0
+    if motion_token_mode == MOTION_TOKEN_MODE_PARQUET_REPLAY:
+        replay_motion_tokens = _load_replay_motion_tokens(config.motion_token_replay_path)
+        print_green(
+            f"Loaded {len(replay_motion_tokens)} replay motion tokens from "
+            f"{config.motion_token_replay_path}"
+        )
+
     robot_model = instantiate_g1_robot_model(waist_location="lower_and_upper_body")
 
     # Isaac-GR00T PolicyClient
@@ -615,11 +667,21 @@ def main(config: InferenceConfig):
 
     PROMPT_MSG_PREFIX = "prompt:"
 
+    def next_replay_motion_token() -> np.ndarray:
+        nonlocal replay_token_index
+        if replay_motion_tokens is None:
+            raise RuntimeError("Replay motion tokens are not loaded.")
+        if replay_token_index >= len(replay_motion_tokens):
+            return np.zeros(MOTION_TOKEN_DIM, dtype=np.float32)
+        motion_token = replay_motion_tokens[replay_token_index]
+        replay_token_index += 1
+        return motion_token
+
     def check_keyboard_input():
         nonlocal pause_loop, cpp_loop_running, cpp_mode
         nonlocal initial_pose_left_hand_closed, initial_pose_right_hand_closed
         nonlocal cached_action_chunk, action_chunk_index, last_inference_time
-        nonlocal zmq_frame_counter
+        nonlocal zmq_frame_counter, replay_token_index
 
         key = keyboard_listener.read_msg()
         if key is None:
@@ -663,6 +725,9 @@ def main(config: InferenceConfig):
                 print("Policy loop paused (C++ loop still running - press 'k' to stop)")
             else:
                 print("Policy loop resumed")
+                if motion_token_mode == MOTION_TOKEN_MODE_PARQUET_REPLAY:
+                    replay_token_index = 0
+                    print_green("Reset replay motion token index")
         elif key == "k":
             if cpp_loop_running:
                 current_planner = cpp_mode == "PLANNER"
@@ -812,6 +877,9 @@ def main(config: InferenceConfig):
                     for hand_key, hand_value in list(hand_actions.items()):
                         if hand_value.ndim == 2:
                             hand_actions[hand_key] = hand_value[current_idx]
+
+                    if motion_token_mode == MOTION_TOKEN_MODE_PARQUET_REPLAY:
+                        motion_token = next_replay_motion_token()
 
                     # DEBUG: force published motion token to zero.
                     # motion_token = np.zeros_like(motion_token, dtype=np.float32)                
