@@ -15,6 +15,7 @@ Keyboard commands (received via ZMQ from the standalone keyboard publisher):
   p  -> pause / resume the policy loop
   k  -> start / stop the C++ control loop
   i  -> send initial pose and switch to POSE mode
+  m  -> start / stop direct parquet motion-token replay
   t  -> change prompt at runtime (publisher sends ``prompt:<text>``)
   [  -> toggle left hand open/closed for initial pose (hand-enabled policies only)
   ]  -> toggle right hand open/closed for initial pose (hand-enabled policies only)
@@ -551,6 +552,7 @@ def main(config: InferenceConfig):
             f"Loaded {len(replay_motion_tokens)} replay motion tokens from "
             f"{config.motion_token_replay_path}"
         )
+    direct_motion_replay_active = False
 
     robot_model = instantiate_g1_robot_model(waist_location="lower_and_upper_body")
 
@@ -667,6 +669,21 @@ def main(config: InferenceConfig):
 
     PROMPT_MSG_PREFIX = "prompt:"
 
+    def ensure_replay_motion_tokens_loaded() -> bool:
+        nonlocal replay_motion_tokens
+        if replay_motion_tokens is not None:
+            return True
+        try:
+            replay_motion_tokens = _load_replay_motion_tokens(config.motion_token_replay_path)
+        except Exception as e:
+            print(f"Failed to load replay motion tokens: {e}")
+            return False
+        print_green(
+            f"Loaded {len(replay_motion_tokens)} replay motion tokens from "
+            f"{config.motion_token_replay_path}"
+        )
+        return True
+
     def next_replay_motion_token() -> np.ndarray:
         nonlocal replay_token_index
         if replay_motion_tokens is None:
@@ -681,7 +698,7 @@ def main(config: InferenceConfig):
         nonlocal pause_loop, cpp_loop_running, cpp_mode
         nonlocal initial_pose_left_hand_closed, initial_pose_right_hand_closed
         nonlocal cached_action_chunk, action_chunk_index, last_inference_time
-        nonlocal zmq_frame_counter, replay_token_index
+        nonlocal zmq_frame_counter, replay_token_index, direct_motion_replay_active
 
         key = keyboard_listener.read_msg()
         if key is None:
@@ -725,9 +742,39 @@ def main(config: InferenceConfig):
                 print("Policy loop paused (C++ loop still running - press 'k' to stop)")
             else:
                 print("Policy loop resumed")
-                if motion_token_mode == MOTION_TOKEN_MODE_PARQUET_REPLAY:
+                if direct_motion_replay_active:
                     replay_token_index = 0
                     print_green("Reset replay motion token index")
+        elif key == "m":
+            if direct_motion_replay_active:
+                direct_motion_replay_active = False
+                pause_loop = True
+                print_green("Stopped direct motion-token replay; policy loop paused")
+                return
+
+            if not cpp_loop_running:
+                print("Direct motion-token replay not started: press 'k' first.")
+                return
+            if cpp_mode != "POSE":
+                print(
+                    "Direct motion-token replay not started: "
+                    "press 'i' to switch to POSE mode first."
+                )
+                return
+
+            if not ensure_replay_motion_tokens_loaded():
+                print("Direct motion-token replay not started.")
+                return
+
+            direct_motion_replay_active = True
+            pause_loop = False
+            replay_token_index = 0
+            zmq_frame_counter = 0
+            cached_action_chunk = None
+            action_chunk_index = 0
+            last_inference_time = 0.0
+            print_green("Started direct motion-token replay from parquet")
+            print_green("Reset replay motion token index and ZMQ frame counter")
         elif key == "k":
             if cpp_loop_running:
                 current_planner = cpp_mode == "PLANNER"
@@ -817,11 +864,14 @@ def main(config: InferenceConfig):
                 pass
 
             worker_is_busy = inference_busy_event.is_set()
-            should_start = should_trigger_new_inference(
-                cached_chunk_exists=(cached_action_chunk is not None),
-                inference_thread_running=worker_is_busy,
-                time_since_last_inference=(time.monotonic() - last_inference_time),
-                inference_interval=inference_interval,
+            should_start = (
+                not direct_motion_replay_active
+                and should_trigger_new_inference(
+                    cached_chunk_exists=(cached_action_chunk is not None),
+                    inference_thread_running=worker_is_busy,
+                    time_since_last_inference=(time.monotonic() - last_inference_time),
+                    inference_interval=inference_interval,
+                )
             )
 
             if should_start:
@@ -837,6 +887,22 @@ def main(config: InferenceConfig):
                 continue
 
             with telemetry.timer("total_loop"):
+                if direct_motion_replay_active:
+                    motion_token = next_replay_motion_token()
+                    frame_index = np.array([zmq_frame_counter], dtype=np.int64)
+                    zmq_frame_counter += 1
+
+                    zmq_message = pack_latent_action_message(motion_token, frame_index)
+                    zmq_socket.send(zmq_message)
+                    if zmq_frame_counter % 50 == 0:
+                        print_green(
+                            f"ZMQ: Replayed latent action - "
+                            f"frame: {frame_index[0]}, "
+                            f"token shape: {motion_token.shape}"
+                        )
+                    _sleep_remaining(t_start, loop_period)
+                    continue
+
                 if cached_action_chunk is None:
                     print("[DEBUG] No cached chunk yet, waiting...", flush=True)
                     _sleep_remaining(t_start, loop_period)

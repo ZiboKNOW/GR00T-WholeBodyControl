@@ -132,6 +132,9 @@ class InferenceLaunchConfig:
     action_horizon: int = 40
     """Action horizon of the VLA policy."""
 
+    motion_token_replay_path: str = ""
+    """Parquet file used when pressing m for direct motion-token replay."""
+
     # Camera
     camera_host: str = "localhost"
     """Camera server host."""
@@ -268,6 +271,8 @@ def main(config: InferenceLaunchConfig):
     print(f"  Prompt:          {config.prompt}")
     print(f"  Action rate:     {config.action_publish_rate} Hz")
     print(f"  Action horizon:  {config.action_horizon}")
+    if config.motion_token_replay_path:
+        print(f"  Replay parquet:  {config.motion_token_replay_path}")
     print(f"  Camera:          {config.camera_host}:{config.camera_port}")
     print(f"  Data exporter:   {'Yes' if config.data_exporter else 'No'}")
     if config.data_exporter:
@@ -335,7 +340,7 @@ def main(config: InferenceLaunchConfig):
         pub = ctx.socket(zmq.PUB)
         pub.bind('tcp://localhost:5580')
         time.sleep(0.5)
-        print('Keyboard publisher ready. Keys: p=pause, k=start/stop, i=init pose, [/]=toggle hands if enabled, t=prompt')
+        print('Keyboard publisher ready. Keys: p=pause, k=start/stop, i=init pose, m=motion replay, [/]=toggle hands if enabled, t=prompt')
         while True:
             key = input()
             if key.startswith('t '):
@@ -386,6 +391,8 @@ def main(config: InferenceLaunchConfig):
         f"--camera-host {config.camera_host} "
         f"--camera-port {config.camera_port}"
     )
+    if config.motion_token_replay_path:
+        inference_cmd += f" --motion-token-replay-path '{config.motion_token_replay_path}'"
 
     print("Starting VLA inference (pane 1)...")
     _send_to_pane(2, inference_cmd, wait=1.0)
@@ -419,6 +426,7 @@ def main(config: InferenceLaunchConfig):
     print("    p        - Pause / resume inference")
     print("    k        - Start / stop C++ control loop")
     print("    i        - Send initial pose")
+    print("    m        - Start / stop direct motion-token replay")
     print("    [        - Toggle left hand open/closed (if hand actions enabled)")
     print("    ]        - Toggle right hand open/closed (if hand actions enabled)")
     print("    t <text> - Change inference prompt")
