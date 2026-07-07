@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<mujoco model="cube40">
+  <!-- 40 cm cube; spawn pose from walk_with_suitcase_g1_arm_aligned/motion.npz frame 0.
+       freejoint at link origin on floor (z=0); geom offset places box bottom on floor.
+       Body/joint names match suitcase scene for base_sim spawn logic. -->
+  <worldbody>
+    <body name="suitcase" pos="1.034730 -0.161323 0">
+      <freejoint name="suitcase_root"/>
+      <inertial mass="0.9" pos="0 0 0.2" diaginertia="0.024 0.024 0.024"/>
+      <geom type="box" size="0.2 0.2 0.2" pos="0 0 0.2" rgba="0.55 0.35 0.15 1"/>
+    </body>
+  </worldbody>
+  <sensor>
+    <framepos name="suitcase_pos" objtype="xbody" objname="suitcase"/>
+    <framequat name="suitcase_quat" objtype="xbody" objname="suitcase"/>
+  </sensor>
+</mujoco>

@@ -36,6 +36,7 @@ import signal
 import subprocess
 import sys
 import time
+from typing import Literal
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 ISAAC_GR00T_ROOT = REPO_ROOT.parent / "Isaac-GR00T"
@@ -115,6 +116,10 @@ class Sim2SimRecordConfig:
     action_publish_rate: int = 50
     action_horizon: int = 40
     data_collection_frequency: int = 50
+    object_type: Literal["suitcase", "cube40"] = "suitcase"
+    """Object spawn pose to use in MuJoCo (suitcase or cube40)."""
+    xml_path: str = ""
+    """Optional MuJoCo scene XML path passed through to run_sim_loop."""
 
     root_output_dir: str = "/home/ubuntu/DATA4/zzb/HDMI/vla_sim_videos"
     """Directory where the LeRobot-style dataset (and mp4s) are written."""
@@ -456,6 +461,11 @@ def main(config: Sim2SimRecordConfig) -> None:
     if not config.skip_policy_server and not model_path.is_dir():
         raise FileNotFoundError(f"Checkpoint not found: {model_path}")
     config.model_path = str(model_path)
+    if config.xml_path:
+        xml_path = Path(config.xml_path).expanduser()
+        xml_file = xml_path if xml_path.is_absolute() else REPO_ROOT / xml_path
+        if not xml_file.is_file():
+            raise FileNotFoundError(f"MuJoCo scene XML not found: {xml_file}")
 
     if not config.dataset_name:
         config.dataset_name = f"vla_sim2sim_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -519,11 +529,13 @@ def main(config: Sim2SimRecordConfig) -> None:
             f"source .venv_sim/bin/activate && "
             f"export MUJOCO_GL=egl && "
             f"python -u gear_sonic/scripts/run_sim_loop.py "
-            f"--wbc-version nohand_suitcase --no-with-hands "
+            f"--wbc-version nohand_suitcase --object-type {config.object_type} --no-with-hands "
             f"--enable-offscreen --enable-image-publish --no-enable-onscreen "
             f"--ego-view-only "
             f"--camera-port {config.camera_port}"
         )
+        if config.xml_path:
+            sim_cmd += f" --xml-path '{config.xml_path}'"
 
         deploy_cmd = (
             f"{shell}"
@@ -582,7 +594,9 @@ def main(config: Sim2SimRecordConfig) -> None:
                 processes=processes,
             )
 
-        if not config.skip_scene_build:
+        if config.xml_path:
+            print("[skip] scene build (using --xml-path)")
+        elif not config.skip_scene_build:
             _build_scene()
 
         # sim2sim.md: PolicyServer -> MuJoCo (elastic band ON) -> deploy Init Done.

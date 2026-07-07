@@ -63,6 +63,7 @@ python gear_sonic/scripts/build_rubberhand_suitcase_scene.py
 - C++ deploy：`InitControl` 在弹力带下 ramp 到同一套 render 初始姿态（终端 3 出现 `Init Done`）；`default_angles` 对齐 render 的 `sonic_g1_model_12` low-level policy 基准（wrist yaw 基准为 0，不是初始姿态）
 - 右臂关键初始角：`right_shoulder_roll≈-0.261`，`right_shoulder_yaw≈0.643`，`right_elbow≈1.119`，`right_wrist_yaw≈-0.251`
 - 行李箱：`suitcase-simplified_training.xml` 竖立放置（freejoint 在 motion.npz 的 suitcase link 原点；geom offset 使 20×30 cm 面贴地、高 40 cm；与 `sub1_suitcase_011` 第 0 帧 pelvis-yaw 相对位姿一致）
+- 可选 40 cm 立方体：`run_sim_loop.py --object-type cube40` 加载 `cube-40cm_training.xml`，初始相对位姿对齐 `walk_with_suitcase_g1_arm_aligned/motion.npz` 第 0 帧（pelvis-yaw 水平偏移约 `[1.035, -0.161]` m）
 
 修改 deploy 默认关节角后需重新编译：
 ```bash
@@ -94,6 +95,8 @@ uv run python gr00t/eval/run_gr00t_server.py \
 
 `Channel factory init error` 是 DDS 重复初始化提示，可忽略。若之前有 deploy 残留，先 `pkill -f g1_deploy` 再启动。
 
+默认使用行李箱（`suitcase-simplified_training.xml`）。若要把物体换成 **40 cm 立方体**（初始相对位姿对齐 `walk_with_suitcase_g1_arm_aligned/motion.npz` 第 0 帧），在下方命令加 `--object-type cube40`；其余终端与 prompt 不变。
+
 ```bash
 cd GR00T-WholeBodyControl
 source .venv_sim/bin/activate
@@ -107,6 +110,20 @@ python gear_sonic/scripts/run_sim_loop.py \
     --no-enable-onscreen \
     --ego-view-only \
     --camera-port 5555
+```
+
+40 cm 立方体示例（仅终端 2 多一个参数）：
+
+```bash
+python gear_sonic/scripts/run_sim_loop.py \
+    --wbc-version nohand_suitcase \
+    --no-with-hands \
+    --enable-offscreen \
+    --enable-image-publish \
+    --no-enable-onscreen \
+    --ego-view-only \
+    --camera-port 5555 \
+    --object-type cube40
 ```
 
 ### 3. C++ Whole-Body Deploy（sim）

@@ -126,6 +126,9 @@ class BaseConfig(ArgsConfigTemplate):
     wbc_policy_class: str = "G1DecoupledWholeBodyPolicy"
     """Whole body policy class."""
 
+    xml_path: str = ""
+    """Optional MuJoCo scene XML path overriding ROBOT_SCENE."""
+
     # System Configuration
     interface: str = "sim"
     """Interface to use for the control loop. [sim, real, lo, enxe8ea6a9c4e09]"""
@@ -331,6 +334,15 @@ class BaseConfig(ArgsConfigTemplate):
 
         wbc_config = override_wbc_config(wbc_config, self)
 
+        wbc_config["OBJECT_TYPE"] = self.object_type
+        if self.object_type == "cube40":
+            wbc_config["ROBOT_SCENE"] = (
+                "gear_sonic/data/robot_model/model_data/g1/g1_29dof_nohand/"
+                "g1_29dof_rubberhand_cube40_sim.xml"
+            )
+        if self.xml_path:
+            wbc_config["ROBOT_SCENE"] = str(Path(self.xml_path).expanduser())
+
         return wbc_config
 
 
@@ -349,6 +361,9 @@ class SimLoopConfig(BaseConfig):
 
     ego_view_only: bool = False
     """Publish ego_view + global_view (no wrist cameras). VLA inference uses ego_view only."""
+
+    object_type: Literal["suitcase", "cube40"] = "suitcase"
+    """Manipulable object in the MuJoCo scene: default suitcase, or a 40 cm cube."""
 
     verbose: bool = False
     """Verbose output, override the base config verbose"""

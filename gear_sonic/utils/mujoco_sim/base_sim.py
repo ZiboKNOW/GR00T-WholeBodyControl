@@ -33,6 +33,14 @@ GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SUITCASE_OFFSET_PELVIS_YAW = np.array([0.532087, -0.003498, 0.0])
 # Identity in pelvis-yaw frame: 30x40 cm face toward the robot, 20x30 cm face on the floor.
 SUITCASE_QUAT_PELVIS_YAW = np.array([1.0, 0.0, 0.0, 0.0])
+# walk_with_suitcase_g1_arm_aligned/motion.npz frame 0 (suitcase link in pelvis-yaw frame).
+CUBE40_OFFSET_PELVIS_YAW = np.array([1.03473013, -0.16132320, 0.0])
+CUBE40_QUAT_PELVIS_YAW = np.array([0.99997611, 0.0, 0.0, -0.00691261])
+
+OBJECT_SPAWN_POSES = {
+    "suitcase": (SUITCASE_OFFSET_PELVIS_YAW, SUITCASE_QUAT_PELVIS_YAW),
+    "cube40": (CUBE40_OFFSET_PELVIS_YAW, CUBE40_QUAT_PELVIS_YAW),
+}
 INSPIRE_PASSIVE_HAND_MIMIC = {
     "thumb_intermediate": (1, 1.6),
     "thumb_distal": (1, 2.4),
@@ -321,8 +329,17 @@ class DefaultEnv:
         self.passive_hand_mimic_actuators = self._collect_passive_hand_mimic_actuators()
         self._apply_spawn_pose()
 
+    def _object_spawn_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        object_type = self.config.get("OBJECT_TYPE", "suitcase")
+        if object_type not in OBJECT_SPAWN_POSES:
+            raise ValueError(
+                f"Unknown OBJECT_TYPE {object_type!r}; expected one of {sorted(OBJECT_SPAWN_POSES)}"
+            )
+        return OBJECT_SPAWN_POSES[object_type]
+
     def _compute_suitcase_world_pose(self) -> tuple[np.ndarray, np.ndarray]:
         """Map pelvis-yaw horizontal offset to world frame; freejoint z stays on the floor."""
+        offset_pelvis_yaw, quat_pelvis_yaw = self._object_spawn_pose()
         pelvis_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
         pelvis_pos = self.mj_data.xpos[pelvis_id]
         pelvis_mat = self.mj_data.xmat[pelvis_id].reshape(3, 3)
@@ -330,15 +347,15 @@ class DefaultEnv:
         c, s = np.cos(yaw), np.sin(yaw)
         offset_xy = np.array(
             [
-                c * SUITCASE_OFFSET_PELVIS_YAW[0] - s * SUITCASE_OFFSET_PELVIS_YAW[1],
-                s * SUITCASE_OFFSET_PELVIS_YAW[0] + c * SUITCASE_OFFSET_PELVIS_YAW[1],
+                c * offset_pelvis_yaw[0] - s * offset_pelvis_yaw[1],
+                s * offset_pelvis_yaw[0] + c * offset_pelvis_yaw[1],
                 0.0,
             ]
         )
         world_pos = pelvis_pos + offset_xy
         world_pos[2] = 0.0
         yaw = np.arctan2(pelvis_mat[1, 0], pelvis_mat[0, 0])
-        r_world = Rotation.from_euler("z", yaw) * _rotation_from_mujoco_quat(SUITCASE_QUAT_PELVIS_YAW)
+        r_world = Rotation.from_euler("z", yaw) * _rotation_from_mujoco_quat(quat_pelvis_yaw)
         quat_xyzw = r_world.as_quat()
         world_quat = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]], dtype=np.float64)
         return world_pos, world_quat
