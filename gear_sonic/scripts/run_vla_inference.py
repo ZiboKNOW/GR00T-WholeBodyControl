@@ -10,6 +10,20 @@ All communication uses ZMQ:
 
 Async timing follows HDMI ``render_vla_asyn.py`` sim action-slot scheduling.
 No camera delay or latency compensation is enabled by default.
+
+Uses the Isaac-GR00T PolicyClient (ZMQ REQ/REP) to communicate with a
+running PolicyServer.
+
+Keyboard commands (received via ZMQ from the standalone keyboard publisher):
+  p  -> pause / resume the policy loop
+  k  -> start / stop the C++ control loop
+  i  -> blend smoothly to initial pose (or snap if no prior token) and switch to POSE mode
+  t  -> change prompt at runtime (publisher sends ``prompt:<text>``)
+  [  -> toggle left hand open/closed for initial pose
+  ]  -> toggle right hand open/closed for initial pose
+  c  -> start recording (handled by data exporter if running)
+  s  -> stop recording success (handled by data exporter)
+  f  -> stop recording failure (handled by data exporter)
 """
 
 from dataclasses import dataclass
@@ -118,6 +132,13 @@ class InferenceConfig:
 
     embodiment_tag: str = "unitree_g1_sonic_no_hand_wo_wrist"
     prompt: str = "demo"
+    """The language prompt for the VLA policy."""
+
+    initial_pose_blend_duration: float = 1.0
+    """Duration (seconds) for smooth interpolation to initial pose. The robot
+    blends from its current motion token to the initial pose token over this
+    period. Set to 0 to snap instantly (no blend)."""
+
     verbose_timing: bool = False
 
     def resolved_inference_rate_hz(self) -> float:
@@ -438,6 +459,7 @@ def main(config: InferenceConfig):
     latest_camera_images: dict[str, np.ndarray] | None = None
     latest_frame_sim_time_s: float | None = None
     missing_sim_time_warned = False
+    last_sent_motion_token: np.ndarray | None = None
 
     print(f"Starting the policy loop with language prompt: {language_prompt_ref[0]}")
 
@@ -446,6 +468,7 @@ def main(config: InferenceConfig):
     )
 
     def publish_initial_pose():
+        nonlocal last_sent_motion_token
         print("Moving to initial pose")
         left_hand = (
             INSPIRE_CLOSED_HAND.copy()
@@ -472,9 +495,75 @@ def main(config: InferenceConfig):
                 quantize=config.quantize_motion_token_on_publish,
             )
         zmq_socket.send(zmq_message)
+        last_sent_motion_token = LATENT_INITIAL_MOTION_TOKEN.copy()
         print_green("Sent latent initial pose via ZMQ")
         time.sleep(1.0)
         print("Initial pose done.")
+
+    def blend_to_initial_pose(duration_s: float) -> bool:
+        """Smoothly interpolate from the last sent motion token to the initial pose.
+
+        Linearly blends over ``duration_s`` seconds at the action publish rate,
+        sending intermediate tokens each loop iteration. Returns True if blend
+        was performed, False if skipped (no previous token available).
+        """
+        nonlocal last_sent_motion_token
+        if last_sent_motion_token is None:
+            print("No previous motion token — snapping to initial pose instead.")
+            publish_initial_pose()
+            return False
+
+        start_token = last_sent_motion_token.copy()
+        target_token = LATENT_INITIAL_MOTION_TOKEN.copy()
+        num_steps = max(1, round(config.action_publish_rate * duration_s))
+        step_period = 1.0 / config.action_publish_rate
+
+        left_hand = (
+            INSPIRE_CLOSED_HAND.copy()
+            if initial_pose_left_hand_closed
+            else INSPIRE_OPEN_HAND.copy()
+        )
+        right_hand = (
+            INSPIRE_CLOSED_HAND.copy()
+            if initial_pose_right_hand_closed
+            else INSPIRE_OPEN_HAND.copy()
+        )
+
+        print(
+            f"Blending to initial pose over {duration_s:.2f}s "
+            f"({num_steps} steps at {config.action_publish_rate} Hz)"
+        )
+
+        for step in range(num_steps):
+            t_step_start = time.monotonic()
+            alpha = (step + 1) / num_steps
+            blended_token = ((1.0 - alpha) * start_token + alpha * target_token).astype(
+                np.float32
+            )
+            if no_hand:
+                zmq_message = pack_latent_action_message(
+                    motion_token=blended_token,
+                    frame_index=np.array([0], dtype=np.int64),
+                    quantize=config.quantize_motion_token_on_publish,
+                )
+            else:
+                zmq_message = pack_latent_action_message(
+                    motion_token=blended_token,
+                    frame_index=np.array([0], dtype=np.int64),
+                    left_hand_joints=left_hand,
+                    right_hand_joints=right_hand,
+                    quantize=config.quantize_motion_token_on_publish,
+                )
+            zmq_socket.send(zmq_message)
+            last_sent_motion_token = blended_token.copy()
+
+            elapsed = time.monotonic() - t_step_start
+            remaining = step_period - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
+        print_green("Initial pose blend complete.")
+        return True
 
     def send_cpp_control_command(start: bool, planner: bool = False):
         nonlocal cpp_loop_running, cpp_mode
@@ -493,18 +582,22 @@ def main(config: InferenceConfig):
             print(f"Warning: Failed to send control command: {e}")
             return False
 
-    def reset_async_state():
+    def reset_async_state(clear_last_token: bool = False):
         nonlocal zmq_frame_counter, latest_camera_images, latest_frame_sim_time_s
+        nonlocal last_sent_motion_token
         async_loop.reset()
         zmq_frame_counter = 0
         latest_camera_images = None
         latest_frame_sim_time_s = None
+        if clear_last_token:
+            last_sent_motion_token = None
 
     PROMPT_MSG_PREFIX = "prompt:"
 
     def check_keyboard_input():
         nonlocal pause_loop, cpp_loop_running, cpp_mode
         nonlocal initial_pose_left_hand_closed, initial_pose_right_hand_closed
+        nonlocal zmq_frame_counter, last_sent_motion_token
 
         key = keyboard_listener.read_msg()
         if key is None:
@@ -518,14 +611,26 @@ def main(config: InferenceConfig):
                 print_green(f'Inference prompt changed: "{old_prompt}" -> "{new_prompt}"')
             return
 
-        if key == "i":
-            print("Moving to initial pose")
-            reset_async_state()
-            publish_initial_pose()
+        if key == "c":
+            print("Keyboard: 'c' (start recording -- handled by data exporter)")
+        elif key == "s":
+            print("Keyboard: 's' (stop recording success -- handled by data exporter)")
+        elif key == "f":
+            print("Keyboard: 'f' (stop recording failure -- handled by data exporter)")
+        elif key == "i":
             if cpp_loop_running and cpp_mode == "PLANNER":
                 send_cpp_control_command(start=True, planner=False)
             elif not cpp_loop_running:
                 print("Note: C++ loop not running - press 'k' to start")
+
+            pause_loop = True
+            if config.initial_pose_blend_duration > 0 and last_sent_motion_token is not None:
+                blend_to_initial_pose(config.initial_pose_blend_duration)
+            else:
+                publish_initial_pose()
+
+            reset_async_state()
+            print("Cleared async timing state and reset frame counter")
         elif key == "p":
             pause_loop = not pause_loop
             print(f"{'Paused' if pause_loop else 'Resumed'} policy loop")
@@ -636,11 +741,13 @@ def main(config: InferenceConfig):
                                 quantize=config.quantize_motion_token_on_publish,
                             )
                         zmq_socket.send(zmq_message)
+                        last_sent_motion_token = motion_token.copy()
                         if zmq_frame_counter % 50 == 0:
                             print_green(
                                 f"ZMQ: Sent latent action - frame: {frame_index[0]}, "
                                 f"sim_time={camera_timeline.sim_time_s:.3f}s, "
-                                f"action_index={action_index}"
+                                f"action_index={action_index}, "
+                                f"token shape: {motion_token.shape}"
                             )
                         async_loop.advance_after_publish()
                     else:

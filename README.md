@@ -3,8 +3,8 @@
   <img src="media/groot_wbc.png" width="800" alt="GEAR SONIC Header">
 
   <!-- --- -->
-  
-  
+
+
 </div>
 
 <div align="center">
@@ -31,6 +31,7 @@ This is the codebase for the **GR00T Whole-Body Control (WBC)** projects. It hos
 
 ## News
 
+- **[2026-06-16]** **Low-latency SONIC release** — added a low-latency G1 controller variant on [Hugging Face](https://huggingface.co/nvidia/GEAR-SONIC/tree/main/low_latency) under `low_latency/`. See the [Download Models](https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/download_models.html#low-latency-sonic-variant) and [VLA Inference](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/vla_inference.html#low-latency-sonic-wbc) docs for usage.
 - **[2026-05-07]** 🤖 **End-to-end VLA workflow on G1** — collect teleop data, fine-tune Isaac-GR00T N1.7, and deploy with SONIC whole-body control. See [Data Collection](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/data_collection.html), [VLA Workflow](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/vla_workflow.html), and [VLA Inference](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/vla_inference.html).
 - **[2026-04-27]** 🧩 **MotionBricks preview** — interactive G1 demo, pretrained checkpoints (VQVAE · pose · root), synthetic training code, and motion-representation docs. See [`motionbricks/`](motionbricks/) and the [project page](https://nvlabs.github.io/motionbricks/).
 - **[2026-04-14]** 🌐 **[Live web demo](https://nvlabs.github.io/GEAR-SONIC/demo.html)** — try SONIC interactively in your browser. Features [Kimodo](https://github.com/nv-tlabs/kimodo) text-to-motion generation.
@@ -58,28 +59,53 @@ This is the codebase for the **GR00T Whole-Body Control (WBC)** projects. It hos
 - [Decoupled WBC](#decoupled-wbc)
 
 
-## GEAR-SONIC 
+## GEAR-SONIC
 
 <p style="font-size: 1.2em;">
-    <a href="https://nvlabs.github.io/GEAR-SONIC/"><strong>Website</strong></a> | 
-    <a href="https://huggingface.co/nvidia/GEAR-SONIC"><strong>Model</strong></a> | 
-    <a href="https://arxiv.org/abs/2511.07820"><strong>Paper</strong></a> | 
+    <a href="https://nvlabs.github.io/GEAR-SONIC/"><strong>Website</strong></a> |
+    <a href="https://huggingface.co/nvidia/GEAR-SONIC"><strong>Model</strong></a> |
+    <a href="https://arxiv.org/abs/2511.07820"><strong>Paper</strong></a> |
     <a href="https://nvlabs.github.io/GR00T-WholeBodyControl/"><strong>Docs</strong></a>
   </p>
 
 <div align="center">
   <img src="docs/source/_static/sonic-preview-gif-480P.gif" width="800" >
-  
+
 </div>
 
 SONIC is a humanoid behavior foundation model that gives robots a core set of motor skills learned from large-scale human motion data. Rather than building separate controllers for predefined motions, SONIC uses motion tracking as a scalable training task, enabling a single unified policy to produce natural, whole-body movement and support a wide range of behaviors — from walking and crawling to teleoperation and multi-modal control. It is designed to generalize beyond the motions it has seen during training and to serve as a foundation for higher-level planning and interaction.
 
 In this repo, we release SONIC's training code, deployment framework, model checkpoints, and teleoperation stack for data collection.
 
+The low-latency SONIC variant is available on Hugging Face under [`low_latency/`](https://huggingface.co/nvidia/GEAR-SONIC/tree/main/low_latency). It keeps the default top-level deployment policy unchanged. Download it with `python download_from_hf.py --low-latency`.
+
+For C++ deployment:
+
+```bash
+cd gear_sonic_deploy
+./deploy.sh \
+    --cp policy/low_latency/model \
+    --obs-config policy/low_latency/observation_config.yaml \
+    --input-type zmq_manager \
+    real
+```
+
+For the Python VLA launcher:
+
+```bash
+python gear_sonic/scripts/launch_inference.py \
+    --deploy-checkpoint policy/low_latency/model \
+    --deploy-obs-config policy/low_latency/observation_config.yaml \
+    --camera-host 192.168.123.164 \
+    --prompt "pick up the cup"
+```
+
 
 ## VR Whole-Body Teleoperation
 
 SONIC supports real-time whole-body teleoperation via PICO VR headset, enabling natural human-to-robot motion transfer for data collection and interactive control.
+
+This repo can also drive the headset over Isaac Teleop / CloudXR by launching `gear_sonic/scripts/pico_manager_thread_server.py --input-source isaac-teleop`. The streamer hosts the CloudXR runtime in-process via `isaacteleop[cloudxr]` — no separate publisher container required. That path is currently documented and supported only for **G1 with a Thor backpack**. The Isaac Teleop bring-up steps are documented in [`docs/source/tutorials/isaac_teleop_publisher_setup.md`](docs/source/tutorials/isaac_teleop_publisher_setup.md).
 
 <div align="center">
 <table>
@@ -209,8 +235,8 @@ For the full guide including multi-node training, evaluation, ONNX export, and S
 - [x] Setup documentation
 - [x] Open source teleoperation stack and demonstration scripts
 - [x] Release training scripts and recipes for motion imitation and fine-tuning
-- [ ] Open source large-scale data collection workflows and fine-tuning VLA scripts. 
-- [ ] Publish additional preprocessed large-scale human motion datasets
+- [x] Open source large-scale data collection workflows and fine-tuning VLA scripts.
+- [x] Publish additional preprocessed large-scale human motion datasets
 
 
 
@@ -322,7 +348,7 @@ All required legal documents, including the Apache 2.0 license, 3rd-party attrib
 
 ## Support
 
-For questions and issues, please contact the GEAR WBC team at [gear-wbc@nvidia.com](mailto:gear-wbc@nvidia.com) to provide feedback! 
+For questions and issues, please contact the GEAR WBC team at [gear-wbc@nvidia.com](mailto:gear-wbc@nvidia.com) to provide feedback!
 
 ## MotionBricks
 
