@@ -136,7 +136,14 @@ uint64_t StateLogger::LogFullState(const std::array<double, 4>& base_quat,
   return e.index;
 }
 
-bool StateLogger::LogPostState(const std::span<double>& token_state, int encoder_mode, const std::string& motion_name, bool play) {
+bool StateLogger::LogPostState(const std::span<double>& token_state,
+                               int encoder_mode,
+                               const std::string& motion_name,
+                               bool play,
+                               const std::string& program_state,
+                               const std::string& input_active,
+                               bool zmq_stream_enabled,
+                               int64_t external_token_frame_index) {
   std::lock_guard<std::mutex> lock(ring_mutex_);
 
   // Check if we have any entries
@@ -161,6 +168,10 @@ bool StateLogger::LogPostState(const std::span<double>& token_state, int encoder
   newest.encoder_mode = encoder_mode;
   newest.motion_name = motion_name;
   newest.play = play;
+  newest.program_state = program_state;
+  newest.input_active = input_active;
+  newest.zmq_stream_enabled = zmq_stream_enabled;
+  newest.external_token_frame_index = external_token_frame_index;
   newest.has_post_state_data = true;
 
   // Write to CSV if enabled (token state gets its own file)
@@ -501,5 +512,9 @@ Entry StateLogger::makeZeroEntry_() const {
   // Post-state data (default to no post-state data)
   e.has_post_state_data = false;
   e.token_state.clear();
+  e.program_state = "";
+  e.input_active = "";
+  e.zmq_stream_enabled = false;
+  e.external_token_frame_index = -1;
   return e;
 }

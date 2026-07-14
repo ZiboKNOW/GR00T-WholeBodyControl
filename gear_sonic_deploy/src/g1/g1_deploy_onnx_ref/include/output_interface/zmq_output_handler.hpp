@@ -279,9 +279,9 @@ private:
             has_heading_state = true;
         }
 
-        // State-logger fields: 18 base + 2 optional heading
+        // State-logger fields: 22 base + 2 optional heading
         // Visualisation fields: output_data_map_.size() (typically 11)
-        int num_state_fields = has_heading_state ? 20 : 18;
+        int num_state_fields = has_heading_state ? 24 : 22;
         int num_viz_fields = static_cast<int>(output_data_map_.size());
         pk.pack_map(num_state_fields + num_viz_fields);
 
@@ -384,6 +384,18 @@ private:
         pk.pack("motor_temperature");
         pk.pack_array(state.motor_temperature.size());
         for (const auto& val : state.motor_temperature) pk.pack(val);
+
+        pk.pack("program_state");
+        pk.pack(state.program_state.empty() ? std::string("UNKNOWN") : state.program_state);
+
+        pk.pack("input_active");
+        pk.pack(state.input_active.empty() ? std::string("UNKNOWN") : state.input_active);
+
+        pk.pack("zmq_stream_enabled");
+        pk.pack(state.zmq_stream_enabled);
+
+        pk.pack("external_token_frame_index");
+        pk.pack(state.external_token_frame_index);
 
         if (has_heading_state) {
             pk.pack("init_base_quat");

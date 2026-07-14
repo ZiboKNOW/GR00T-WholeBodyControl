@@ -34,6 +34,7 @@
 #include <queue>
 #include <memory>
 #include <optional>
+#include <string>
 #include "../utils.hpp"              // For DataBuffer  
 #include "../hand_types.hpp"         // For HandJointArray
 #include "../robot_parameters.hpp"   // For HeadingState, OperatorState
@@ -114,6 +115,27 @@ public:
     /// @return The InputType tag for this concrete implementation.
     virtual InputType GetType() {
       return type_;
+    }
+
+    /// Human-readable active input name published for external supervisors.
+    virtual std::string GetInputActiveName() const {
+      switch (type_) {
+        case InputType::KEYBOARD: return "KEYBOARD";
+        case InputType::GAMEPAD: return "GAMEPAD";
+        case InputType::ROS2: return "ROS2";
+        case InputType::NETWORK: return "ZMQ";
+        default: return "UNKNOWN";
+      }
+    }
+
+    /// True only when this interface is actively consuming a ZMQ token/motion stream.
+    virtual bool IsZmqStreamEnabled() const {
+      return false;
+    }
+
+    /// Latest external token frame index accepted by this interface, or -1 if none.
+    virtual int64_t GetExternalTokenFrameIndex() const {
+      return -1;
     }
 
     /// @return True if this interface provides upper-body joint targets (17 DOF).

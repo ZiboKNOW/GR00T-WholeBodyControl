@@ -67,6 +67,7 @@
 #include <cstdlib>
 #include <limits>
 #include <cstddef>
+#include <atomic>
 
 #include "input_interface.hpp"
 #include "zmq_packed_message_subscriber.hpp"
@@ -109,6 +110,18 @@ public:
     /// When true, handle_input() reads from the ZMQ stream instead of
     /// pre-loaded reference motions.
     bool use_zmq_stream = false;
+
+    std::string GetInputActiveName() const override {
+        return "ZMQ";
+    }
+
+    bool IsZmqStreamEnabled() const override {
+        return use_zmq_stream;
+    }
+
+    int64_t GetExternalTokenFrameIndex() const override {
+        return latest_external_token_frame_index_.load(std::memory_order_acquire);
+    }
     
     /// Reusable sliding-window merger that handles frame alignment, gap
     /// detection, and catch-up logic for streamed motion data.
@@ -413,6 +426,9 @@ public:
                             std::lock_guard<std::mutex> lock(current_motion_mutex);
                             external_token_state_.SetData(result.token_data);
                             has_external_token_state_ = true;
+                            if (result.token_frame_index >= 0) {
+                                latest_external_token_frame_index_.store(result.token_frame_index, std::memory_order_release);
+                            }
                             operator_state.play = true; // this should be redundant because the robot never read reference motion
                         }
                         
@@ -623,6 +639,7 @@ private:
         int frame_step = 1;                        ///< Detected stride between frame indices.
         int protocol_version = 0;                  ///< Protocol version from the message (1, 2, or 3).
         std::vector<double> token_data;            ///< Token data from the message.
+        int64_t token_frame_index = -1;             ///< Protocol v4 token frame index, if provided.
     };
     
     /**
@@ -748,26 +765,27 @@ private:
             
             // Log for debugging (show first token value and frame info if available)
             std::string frame_info = "";
+            int64_t decoded_frame_index = -1;
             if (frame_index_idx >= 0) {
                 const auto& frame_idx_field = buffered_header_.fields[static_cast<size_t>(frame_index_idx)];
                 const auto& frame_idx_buf = buffered_buffers_[static_cast<size_t>(frame_index_idx)];
                 if (frame_idx_field.dtype == "i64" && frame_idx_buf.size() >= sizeof(int64_t)) {
-                    int64_t frame_val;
-                    std::memcpy(&frame_val, frame_idx_buf.data(), sizeof(int64_t));
-                    if (needs_swap) frame_val = byte_swap(frame_val);
-                    frame_info = ", frame_index: " + std::to_string(frame_val);
-                } else if (frame_idx_field.dtype == "i64" && frame_idx_buf.size() > sizeof(int64_t)) {
-                    // Chunk mode: show range
-                    int num_frames = frame_idx_buf.size() / sizeof(int64_t);
-                    int64_t first_frame, last_frame;
+                    const int num_frames = static_cast<int>(frame_idx_buf.size() / sizeof(int64_t));
+                    int64_t first_frame = -1;
+                    int64_t last_frame = -1;
                     std::memcpy(&first_frame, frame_idx_buf.data(), sizeof(int64_t));
                     std::memcpy(&last_frame, frame_idx_buf.data() + (num_frames - 1) * sizeof(int64_t), sizeof(int64_t));
                     if (needs_swap) {
                         first_frame = byte_swap(first_frame);
                         last_frame = byte_swap(last_frame);
                     }
-                    frame_info = ", frames: " + std::to_string(first_frame) + " to " + std::to_string(last_frame) 
-                               + " (chunk_size: " + std::to_string(num_frames) + ")";
+                    decoded_frame_index = last_frame;
+                    if (num_frames == 1) {
+                        frame_info = ", frame_index: " + std::to_string(first_frame);
+                    } else {
+                        frame_info = ", frames: " + std::to_string(first_frame) + " to " + std::to_string(last_frame) 
+                                   + " (chunk_size: " + std::to_string(num_frames) + ")";
+                    }
                 }
             }
             std::cout << "[ZMQEndpointInterface] Protocol v4: Received " << token_dim 
@@ -775,6 +793,7 @@ private:
             
             // Store tokens in the external token state buffer (inherited from InputInterface)
             result.token_data = std::move(token_data);
+            result.token_frame_index = decoded_frame_index;
             
             // Decode hand joint positions if present (6 DOF Inspire URDF-radian values).
             bool has_left_hand_joints = (left_hand_joints_idx >= 0);
@@ -1852,6 +1871,7 @@ private:
     std::optional<std::chrono::steady_clock::time_point> last_receive_time_{}; ///< Timestamp of last OnPoseDataReceived (ms, monotonic).
     uint64_t receive_count_ = 0;       ///< Total number of messages received.
     uint64_t last_decode_time_ = 0;    ///< Timestamp of last DecodeIntoMotionSequence call (ms).
+    std::atomic<int64_t> latest_external_token_frame_index_{-1};
     
 };
 

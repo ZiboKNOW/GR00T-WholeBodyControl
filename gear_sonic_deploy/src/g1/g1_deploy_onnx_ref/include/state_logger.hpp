@@ -118,6 +118,10 @@ class StateLogger {
     int encoder_mode = -2;          // Encoder mode when token state was generated; -2: no token state, -1: need token but no encoder, 0,1,2,...: encoder mode.
     std::string motion_name = "";   // Name of the motion sequence being executed
     bool play = false;              // Operator play state (controls motion playback)
+    std::string program_state = "";
+    std::string input_active = "";
+    bool zmq_stream_enabled = false;
+    int64_t external_token_frame_index = -1;
   };
 
   // Logging period (seconds). Informational only; logger does not enforce cadence.
@@ -183,7 +187,14 @@ class StateLogger {
    * @param motion_name Name of the current motion sequence being executed
    * @param play Operator play state (controls motion playback)
    */
-  bool LogPostState(const std::span<double>& token_state, int encoder_mode = -2, const std::string& motion_name = "", bool play = false);
+  bool LogPostState(const std::span<double>& token_state,
+                    int encoder_mode = -2,
+                    const std::string& motion_name = "",
+                    bool play = false,
+                    const std::string& program_state = "",
+                    const std::string& input_active = "",
+                    bool zmq_stream_enabled = false,
+                    int64_t external_token_frame_index = -1);
 
   size_t capacity() const;
   size_t size() const;

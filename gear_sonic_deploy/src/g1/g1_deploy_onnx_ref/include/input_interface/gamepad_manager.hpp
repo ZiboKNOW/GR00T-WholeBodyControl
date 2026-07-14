@@ -304,6 +304,21 @@ class GamepadManager : public InputInterface {
       return InputInterface::GetExternalTokenState();
     }
 
+    std::string GetInputActiveName() const override {
+      return active_ == ManagedType::GAMEPAD ? "GAMEPAD" : "ZMQ";
+    }
+
+    bool IsZmqStreamEnabled() const override {
+      return active_ == ManagedType::ZMQ && current_ && current_->IsZmqStreamEnabled();
+    }
+
+    int64_t GetExternalTokenFrameIndex() const override {
+      if (active_ == ManagedType::ZMQ && current_) {
+        return current_->GetExternalTokenFrameIndex();
+      }
+      return -1;
+    }
+
     // Receive raw wireless remote data for gamepad
     void UpdateGamepadRemoteData(const uint8_t* buff, size_t size) {
       if (buff == nullptr || size == 0) { return; }
@@ -1074,4 +1089,3 @@ class GamepadManager : public InputInterface {
 };
 
 #endif // GAMEPAD_MANAGER_HPP
-

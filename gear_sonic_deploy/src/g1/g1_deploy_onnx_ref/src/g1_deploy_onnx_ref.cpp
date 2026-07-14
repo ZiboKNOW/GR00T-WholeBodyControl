@@ -167,6 +167,18 @@ class G1Deploy {
   private:
     /// State machine for the control loop lifecycle.
     enum class ProgramState { INIT, WAIT_FOR_CONTROL, CONTROL };
+
+    static std::string ProgramStateName(ProgramState state) {
+      switch (state) {
+        case ProgramState::INIT:
+          return "INIT";
+        case ProgramState::WAIT_FOR_CONTROL:
+          return "WAIT_FOR_CONTROL";
+        case ProgramState::CONTROL:
+          return "CONTROL";
+      }
+      return "UNKNOWN";
+    }
     
     // =========================================================================
     // Core timing, mode, and counters
@@ -3945,7 +3957,20 @@ class G1Deploy {
           // This must be called after GatherObservations() which populates token_state_data_
           if (state_logger_) {
             std::string motion_name = current_motion_copy ? current_motion_copy->name : "";
-            if (!state_logger_->LogPostState(std::span(token_state_data_), current_encoder_mode_copy, motion_name, current_play_copy)) {
+            const std::string input_active =
+              input_interface_ ? input_interface_->GetInputActiveName() : std::string("UNKNOWN");
+            const bool zmq_stream_enabled =
+              input_interface_ ? input_interface_->IsZmqStreamEnabled() : false;
+            const int64_t external_token_frame_index =
+              input_interface_ ? input_interface_->GetExternalTokenFrameIndex() : -1;
+            if (!state_logger_->LogPostState(std::span(token_state_data_),
+                                             current_encoder_mode_copy,
+                                             motion_name,
+                                             current_play_copy,
+                                             ProgramStateName(program_state_),
+                                             input_active,
+                                             zmq_stream_enabled,
+                                             external_token_frame_index)) {
               std::cerr << "[WARNING] Failed to log token state to state logger" << std::endl;
             }
           }
